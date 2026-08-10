@@ -29,4 +29,14 @@ print('''};
 static const struct psbt_test valid_psbts[] =
 {''')
 dump(JSON['valid'])
+print('''};
+
+static const struct psbt_test invalid_bip375_psbts[] =
+{''')
+dump(JSON['bip375']['invalid'])
+print('''};
+
+static const struct psbt_test valid_bip375_psbts[] =
+{''')
+dump(JSON['bip375']['valid'])
 print('};\n')
