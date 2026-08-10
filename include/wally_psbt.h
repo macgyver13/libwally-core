@@ -101,6 +101,8 @@ struct wally_psbt_input {
     struct wally_map musig2_pubkeys;      /* BIP-373: agg pubkey -> participant pubkeys */
     struct wally_map musig2_pubnonces;    /* BIP-373: (participant||agg[||leaf]) -> pubnonce */
     struct wally_map musig2_partial_sigs; /* BIP-373: (participant||agg[||leaf]) -> partial_sig */
+    struct wally_map sp_ecdh_shares; /* BIP375 shares keyed by scan public key */
+    struct wally_map sp_dleq_proofs; /* BIP375 proofs keyed by scan public key */
 #ifndef WALLY_ABI_NO_ELEMENTS
     uint64_t issuance_amount; /* Issuance amount, or 0 if not given */
     uint64_t inflation_keys; /* Number of reissuance tokens, or 0 if none given */
@@ -153,6 +155,8 @@ struct wally_psbt {
     uint32_t fallback_locktime;
     uint32_t has_fallback_locktime;
     uint32_t tx_modifiable_flags;
+    struct wally_map global_sp_ecdh_shares; /* BIP375 shares keyed by scan public key */
+    struct wally_map global_sp_dleq_proofs; /* BIP375 proofs keyed by scan public key */
 #ifndef WALLY_ABI_NO_ELEMENTS
     struct wally_map global_scalars;
     uint32_t pset_modifiable_flags;
@@ -161,6 +165,85 @@ struct wally_psbt {
     struct wally_map *signing_cache;
 };
 #endif /* SWIG */
+
+/** Set or replace a BIP375 global ECDH share. */
+WALLY_CORE_API int wally_psbt_set_global_sp_ecdh_share(
+    struct wally_psbt *psbt,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    const unsigned char *share,
+    size_t share_len);
+
+/** Set or replace a BIP375 global DLEQ proof. */
+WALLY_CORE_API int wally_psbt_set_global_sp_dleq_proof(
+    struct wally_psbt *psbt,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    const unsigned char *proof,
+    size_t proof_len);
+
+/**
+ * Find a BIP375 global ECDH share by its scan public key.
+ *
+ * :param psbt: The PSBT to find the share in.
+ * :param scan_key: The recipient's compressed scan public key.
+ * :param scan_key_len: Length of ``scan_key`` in bytes. Must be `EC_PUBLIC_KEY_LEN`.
+ * :param written: Destination for the 1 based index of the share, or 0 if not found.
+ */
+WALLY_CORE_API int wally_psbt_find_global_sp_ecdh_share(
+    const struct wally_psbt *psbt,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    size_t *written);
+
+/**
+ * Find a BIP375 global DLEQ proof by its scan public key.
+ *
+ * :param psbt: The PSBT to find the proof in.
+ * :param scan_key: The recipient's compressed scan public key.
+ * :param scan_key_len: Length of ``scan_key`` in bytes. Must be `EC_PUBLIC_KEY_LEN`.
+ * :param written: Destination for the 1 based index of the proof, or 0 if not found.
+ */
+WALLY_CORE_API int wally_psbt_find_global_sp_dleq_proof(
+    const struct wally_psbt *psbt,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    size_t *written);
+
+/**
+ * Set or replace a BIP375 ECDH share on an input.
+ *
+ * Used when this signer holds the private key for only some of the eligible
+ * inputs, and so cannot produce a global share covering all of them.
+ */
+WALLY_CORE_API int wally_psbt_input_set_sp_ecdh_share(
+    struct wally_psbt_input *input,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    const unsigned char *share,
+    size_t share_len);
+
+/** Set or replace a BIP375 DLEQ proof on an input. */
+WALLY_CORE_API int wally_psbt_input_set_sp_dleq_proof(
+    struct wally_psbt_input *input,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    const unsigned char *proof,
+    size_t proof_len);
+
+/** Find a BIP375 ECDH share on an input, for `wally_psbt_find_input_sp_ecdh_share`. */
+WALLY_CORE_API int wally_psbt_input_find_sp_ecdh_share(
+    const struct wally_psbt_input *input,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    size_t *written);
+
+/** Find a BIP375 DLEQ proof on an input, for `wally_psbt_find_input_sp_dleq_proof`. */
+WALLY_CORE_API int wally_psbt_input_find_sp_dleq_proof(
+    const struct wally_psbt_input *input,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    size_t *written);
 
 /**
  * Set the previous txid in an input.
