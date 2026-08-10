@@ -182,6 +182,97 @@ WALLY_CORE_API int wally_psbt_set_global_sp_dleq_proof(
     const unsigned char *proof,
     size_t proof_len);
 
+/** Add a BIP375 global ECDH share, keyed by its compressed scan public key. */
+WALLY_CORE_API int wally_psbt_add_global_sp_ecdh_share(
+    struct wally_psbt *psbt,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    const unsigned char *share,
+    size_t share_len);
+
+/** Add a BIP375 global DLEQ proof, keyed by its compressed scan public key. */
+WALLY_CORE_API int wally_psbt_add_global_sp_dleq_proof(
+    struct wally_psbt *psbt,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    const unsigned char *proof,
+    size_t proof_len);
+
+/** Find a BIP375 global ECDH share by its scan public key. */
+WALLY_CORE_API int wally_psbt_find_global_sp_ecdh_share(
+    const struct wally_psbt *psbt,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    size_t *written);
+
+/** Find a BIP375 global DLEQ proof by its scan public key. */
+WALLY_CORE_API int wally_psbt_find_global_sp_dleq_proof(
+    const struct wally_psbt *psbt,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    size_t *written);
+
+/**
+ * Set or replace a BIP375 ECDH share on an input.
+ *
+ * Used when this signer holds the private key for only some of the eligible
+ * inputs, and so cannot produce a global share covering all of them.
+ */
+WALLY_CORE_API int wally_psbt_input_set_sp_ecdh_share(
+    struct wally_psbt_input *input,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    const unsigned char *share,
+    size_t share_len);
+
+/** Set or replace a BIP375 DLEQ proof on an input. */
+WALLY_CORE_API int wally_psbt_input_set_sp_dleq_proof(
+    struct wally_psbt_input *input,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    const unsigned char *proof,
+    size_t proof_len);
+
+/** Add a BIP375 ECDH share to an input. */
+WALLY_CORE_API int wally_psbt_input_add_sp_ecdh_share(
+    struct wally_psbt_input *input,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    const unsigned char *share,
+    size_t share_len);
+
+/** Add a BIP375 DLEQ proof to an input. */
+WALLY_CORE_API int wally_psbt_input_add_sp_dleq_proof(
+    struct wally_psbt_input *input,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    const unsigned char *proof,
+    size_t proof_len);
+
+/** Find a BIP375 ECDH share on an input by its scan public key. */
+WALLY_CORE_API int wally_psbt_input_find_sp_ecdh_share(
+    const struct wally_psbt_input *input,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    size_t *written);
+
+/** Find a BIP375 DLEQ proof on an input by its scan public key. */
+WALLY_CORE_API int wally_psbt_input_find_sp_dleq_proof(
+    const struct wally_psbt_input *input,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    size_t *written);
+
+/** Set the BIP375 ECDH shares in an input. */
+WALLY_CORE_API int wally_psbt_input_set_sp_ecdh_shares(
+    struct wally_psbt_input *input,
+    const struct wally_map *map_in);
+
+/** Set the BIP375 DLEQ proofs in an input. */
+WALLY_CORE_API int wally_psbt_input_set_sp_dleq_proofs(
+    struct wally_psbt_input *input,
+    const struct wally_map *map_in);
+
 /**
  * Set the previous txid in an input.
  *

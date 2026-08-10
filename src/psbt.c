@@ -1185,6 +1185,7 @@ MAP_INNER_FIELD(output, redeem_script, PSBT_OUT_REDEEM_SCRIPT, psbt_fields)
 MAP_INNER_FIELD(output, witness_script, PSBT_OUT_WITNESS_SCRIPT, psbt_fields)
 MAP_INNER_FIELD(output, taproot_internal_key, PSBT_OUT_TAP_INTERNAL_KEY, psbt_fields)
 MAP_INNER_FIELD(output, sp_v0_info, PSBT_OUT_SP_V0_INFO, psbt_fields)
+MAP_INNER_FIELD(output, sp_v0_label, PSBT_OUT_SP_V0_LABEL, psbt_fields)
 SET_MAP(wally_psbt_output, keypath,)
 ADD_KEYPATH(wally_psbt_output)
 ADD_TAP_KEYPATH(wally_psbt_output)
@@ -1224,6 +1225,32 @@ int wally_psbt_output_set_amount(struct wally_psbt_output *output, uint64_t amou
 
 SET_MAP(wally_psbt, global_sp_ecdh_share,)
 SET_MAP(wally_psbt, global_sp_dleq_proof,)
+SET_MAP(wally_psbt_input, sp_ecdh_share,)
+SET_MAP(wally_psbt_input, sp_dleq_proof,)
+
+int wally_psbt_input_set_sp_ecdh_share(struct wally_psbt_input *input,
+                                       const unsigned char *scan_key,
+                                       size_t scan_key_len,
+                                       const unsigned char *share,
+                                       size_t share_len)
+{
+    if (!input)
+        return WALLY_EINVAL;
+    return wally_map_replace(&input->sp_ecdh_shares, scan_key,
+                             scan_key_len, share, share_len);
+}
+
+int wally_psbt_input_set_sp_dleq_proof(struct wally_psbt_input *input,
+                                       const unsigned char *scan_key,
+                                       size_t scan_key_len,
+                                       const unsigned char *proof,
+                                       size_t proof_len)
+{
+    if (!input)
+        return WALLY_EINVAL;
+    return wally_map_replace(&input->sp_dleq_proofs, scan_key,
+                             scan_key_len, proof, proof_len);
+}
 
 int wally_psbt_set_global_sp_ecdh_share(struct wally_psbt *psbt,
                                         const unsigned char *scan_key,
@@ -6915,6 +6942,8 @@ PSBT_GET_S(input, final_witness, wally_tx_witness_stack, wally_tx_witness_stack_
 PSBT_GET_M(input, keypath)
 PSBT_GET_M(input, signature)
 PSBT_GET_M(input, unknown)
+PSBT_GET_M(input, sp_ecdh_share)
+PSBT_GET_M(input, sp_dleq_proof)
 PSBT_GET_I(input, sighash, size_t, PSBT_0)
 
 int wally_psbt_get_input_previous_txid(const struct wally_psbt *psbt, size_t index,
@@ -7049,6 +7078,7 @@ int wally_psbt_clear_input_required_lockheight(struct wally_psbt *psbt, size_t i
 }
 PSBT_FIELD(output, taproot_internal_key, PSBT_0)
 PSBT_FIELD(output, sp_v0_info, PSBT_2)
+PSBT_FIELD(output, sp_v0_label, PSBT_2)
 
 #ifndef WALLY_ABI_NO_ELEMENTS
 #ifndef BUILD_ELEMENTS
