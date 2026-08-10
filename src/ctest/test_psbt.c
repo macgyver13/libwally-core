@@ -45,6 +45,41 @@ int main(void)
         fail("Should have failed to parse psbt %s", invalid_psbts[i].base64);
     }
 
+    for (i = 0; i < sizeof(invalid_bip375_psbts) / sizeof(invalid_bip375_psbts[0]); i++) {
+        struct wally_psbt *psbt;
+
+        if (wally_psbt_from_base64(invalid_bip375_psbts[i].base64, 0, &psbt) != WALLY_OK)
+            continue;
+        fail("Should have failed to parse BIP375 psbt %s", invalid_bip375_psbts[i].base64);
+    }
+
+    for (i = 0; i < sizeof(valid_bip375_psbts) / sizeof(valid_bip375_psbts[0]); i++) {
+        const char *base64_in = valid_bip375_psbts[i].base64;
+        struct wally_psbt *psbt, *psbt_clone;
+        char *output;
+
+        if (wally_psbt_from_base64(base64_in, 0, &psbt) != WALLY_OK)
+            fail("Failed to parse BIP375 psbt %s", base64_in);
+
+        if (wally_psbt_to_base64(psbt, 0, &output) != WALLY_OK || strcmp(output, base64_in) != 0)
+            fail("BIP375 psbt failed to round-trip %s", base64_in);
+        wally_free_string(output);
+
+        if (wally_psbt_clone_alloc(psbt, 0, &psbt_clone) != WALLY_OK)
+            fail("Failed to clone BIP375 psbt %s", base64_in);
+        if (wally_psbt_combine(psbt_clone, psbt) != WALLY_OK)
+            fail("Failed to combine BIP375 psbt %s", base64_in);
+        if (wally_psbt_to_base64(psbt_clone, 0, &output) != WALLY_OK || strcmp(output, base64_in) != 0)
+            fail("Combined BIP375 psbt failed to round-trip %s", base64_in);
+        wally_free_string(output);
+
+        if (wally_psbt_set_version(psbt_clone, 0, WALLY_PSBT_VERSION_0) != WALLY_EINVAL)
+            fail("BIP375 psbt converted to version 0 %s", base64_in);
+
+        wally_psbt_free(psbt_clone);
+        wally_psbt_free(psbt);
+    }
+
     for (i = 0; i < sizeof(valid_psbts) / sizeof(valid_psbts[0]); i++) {
         const char *base64_in = valid_psbts[i].base64;
         struct wally_psbt *psbt, *psbt_clone;

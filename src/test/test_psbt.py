@@ -41,6 +41,24 @@ class PSBTTests(unittest.TestCase):
         for case in JSON['invalid']:
             wally_psbt_free(self.parse_base64(case['psbt'], WALLY_EINVAL))
 
+    def test_bip375(self):
+        """Test BIP375 PSBT fields"""
+        for case in JSON['bip375']['invalid']:
+            wally_psbt_free(self.parse_base64(case['psbt'], WALLY_EINVAL))
+
+        for case in JSON['bip375']['valid']:
+            psbt = self.parse_base64(case['psbt'])
+            self.assertEqual(self.to_base64(psbt), case['psbt'])
+
+            clone = pointer(wally_psbt())
+            self.assertEqual(wally_psbt_clone_alloc(psbt, 0, clone), WALLY_OK)
+            self.assertEqual(wally_psbt_combine(clone, psbt), WALLY_OK)
+            self.assertEqual(self.to_base64(clone), case['psbt'])
+            self.assertEqual(wally_psbt_set_version(clone, 0, 0), WALLY_EINVAL)
+
+            wally_psbt_free(clone)
+            wally_psbt_free(psbt)
+
     def test_valid(self):
         """Test deserializing and roundtripping valid PSBTs"""
         buf, buf_len = make_cbuffer('00' * 4096)

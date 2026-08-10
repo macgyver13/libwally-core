@@ -980,6 +980,52 @@
       "is_pset": true
     }
   ],
+  "bip375": {
+    "invalid": [
+      {
+        "comment": "Output missing both script and silent payment info",
+        "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEB+wQCAAAAAAEOIBERERERERERERERERERERERERERERERERERERERERERAQ8EAAAAAAABAwjoAwAAAAAAAAA="
+      },
+      {
+        "comment": "Label without silent payment info",
+        "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEB+wQCAAAAAAEOIBERERERERERERERERERERERERERERERERERERERERERAQ8EAAAAAAABAwjoAwAAAAAAAAEKBAMAAAAA"
+      },
+      {
+        "comment": "Resolved output with inputs modifiable",
+        "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEBAfsEAgAAAAABDiAREREREREREREREREREREREREREREREREREREREREREQEPBAAAAAAAAQMI6AMAAAAAAAABBAFRAQlCAnm+Zn753LusVaBilc6HCwcCm/zbLc4o2VnygVsW+BeYAsYEf5RB7X1tMEVAbpXAfNhcd45LjO88p6usCblccJ7lAA=="
+      },
+      {
+        "comment": "Resolved output with outputs modifiable",
+        "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEBBgECAfsEAgAAAAABDiAREREREREREREREREREREREREREREREREREREREREREQEPBAAAAAAAAQMI6AMAAAAAAAABBAFRAQlCAnm+Zn753LusVaBilc6HCwcCm/zbLc4o2VnygVsW+BeYAsYEf5RB7X1tMEVAbpXAfNhcd45LjO88p6usCblccJ7lAA=="
+      },
+      {
+        "comment": "Silent payment info with invalid length",
+        "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEB+wQCAAAAAAEOIBERERERERERERERERERERERERERERERERERERERERERAQ8EAAAAAAABAwjoAwAAAAAAAAEJQQJ5vmZ++dy7rFWgYpXOhwsHApv82y3OKNlZ8oFbFvgXmALGBH+UQe19bTBFQG6VwHzYXHeOS4zvPKerrAm5XHCeAA=="
+      },
+      {
+        "comment": "ECDH share with invalid public key",
+        "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEiBwJ5vmZ++dy7rFWgYpXOhwsHApv82y3OKNlZ8oFbFvgXmCEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB+wQCAAAAAAEOIBERERERERERERERERERERERERERERERERERERERERERAQ8EAAAAAAABAwjoAwAAAAAAAAEEAVEA"
+      },
+      {
+        "comment": "Field in a version 0 PSBT",
+        "psbt": "cHNidP8BABQCAAAAAAHoAwAAAAAAAAFRAAAAACIHAnm+Zn753LusVaBilc6HCwcCm/zbLc4o2VnygVsW+BeYIQLGBH+UQe19bTBFQG6VwHzYXHeOS4zvPKerrAm5XHCe5QAA"
+      }
+    ],
+    "valid": [
+      {
+        "comment": "Unresolved silent payment with all sender fields",
+        "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEiBwJ5vmZ++dy7rFWgYpXOhwsHApv82y3OKNlZ8oFbFvgXmCECxgR/lEHtfW0wRUBulcB82Fx3jkuM7zynq6wJuVxwnuUiCAJ5vmZ++dy7rFWgYpXOhwsHApv82y3OKNlZ8oFbFvgXmEAiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiAfsEAgAAAAABDiAREREREREREREREREREREREREREREREREREREREREREQEPBAAAAAAiHQJ5vmZ++dy7rFWgYpXOhwsHApv82y3OKNlZ8oFbFvgXmCECxgR/lEHtfW0wRUBulcB82Fx3jkuM7zynq6wJuVxwnuUiHgJ5vmZ++dy7rFWgYpXOhwsHApv82y3OKNlZ8oFbFvgXmEAzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzAAEDCOgDAAAAAAAAAQlCAnm+Zn753LusVaBilc6HCwcCm/zbLc4o2VnygVsW+BeYAsYEf5RB7X1tMEVAbpXAfNhcd45LjO88p6usCblccJ7lAQoEAwAAAAA="
+      },
+      {
+        "comment": "Resolved silent payment output",
+        "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEB+wQCAAAAAAEOIBERERERERERERERERERERERERERERERERERERERERERAQ8EAAAAAAABAwjoAwAAAAAAAAEEAVEBCUICeb5mfvncu6xVoGKVzocLBwKb/NstzijZWfKBWxb4F5gCxgR/lEHtfW0wRUBulcB82Fx3jkuM7zynq6wJuVxwnuUA"
+      },
+      {
+        "comment": "Resolved silent payment output with a SIGHASH_SINGLE signature present",
+        "psbt": "cHNidP8BAgQCAAAAAQQBAQEFAQEBBgEEAfsEAgAAAAABDiAREREREREREREREREREREREREREREREREREREREREREQEPBAAAAAAAAQMI6AMAAAAAAAABBAFRAQlCAnm+Zn753LusVaBilc6HCwcCm/zbLc4o2VnygVsW+BeYAsYEf5RB7X1tMEVAbpXAfNhcd45LjO88p6usCblccJ7lAA=="
+      }
+    ]
+  },
   "creator": [
     {
       "version": 0,
