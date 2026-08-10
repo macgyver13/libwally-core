@@ -101,6 +101,8 @@ struct wally_psbt_input {
     struct wally_map musig2_pubkeys;      /* BIP-373: agg pubkey -> participant pubkeys */
     struct wally_map musig2_pubnonces;    /* BIP-373: (participant||agg[||leaf]) -> pubnonce */
     struct wally_map musig2_partial_sigs; /* BIP-373: (participant||agg[||leaf]) -> partial_sig */
+    struct wally_map sp_ecdh_shares; /* BIP375 shares keyed by scan public key */
+    struct wally_map sp_dleq_proofs; /* BIP375 proofs keyed by scan public key */
 #ifndef WALLY_ABI_NO_ELEMENTS
     uint64_t issuance_amount; /* Issuance amount, or 0 if not given */
     uint64_t inflation_keys; /* Number of reissuance tokens, or 0 if none given */
@@ -153,6 +155,8 @@ struct wally_psbt {
     uint32_t fallback_locktime;
     uint32_t has_fallback_locktime;
     uint32_t tx_modifiable_flags;
+    struct wally_map global_sp_ecdh_shares; /* BIP375 shares keyed by scan public key */
+    struct wally_map global_sp_dleq_proofs; /* BIP375 proofs keyed by scan public key */
 #ifndef WALLY_ABI_NO_ELEMENTS
     struct wally_map global_scalars;
     uint32_t pset_modifiable_flags;
@@ -161,6 +165,22 @@ struct wally_psbt {
     struct wally_map *signing_cache;
 };
 #endif /* SWIG */
+
+/** Set or replace a BIP375 global ECDH share. */
+WALLY_CORE_API int wally_psbt_set_global_sp_ecdh_share(
+    struct wally_psbt *psbt,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    const unsigned char *share,
+    size_t share_len);
+
+/** Set or replace a BIP375 global DLEQ proof. */
+WALLY_CORE_API int wally_psbt_set_global_sp_dleq_proof(
+    struct wally_psbt *psbt,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    const unsigned char *proof,
+    size_t proof_len);
 
 /**
  * Set the previous txid in an input.
