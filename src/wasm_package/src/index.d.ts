@@ -330,6 +330,8 @@ export function psbt_extract(psbt: Ref_wally_psbt, flags: number): Ref_wally_tx;
 export function psbt_finalize(psbt: Ref_wally_psbt, flags: number): void;
 export function psbt_finalize_input(psbt: Ref_wally_psbt, index: number, flags: number): void;
 export function psbt_find_global_scalar(psbt: Ref_wally_psbt, scalar: Buffer|Uint8Array|null): number;
+export function psbt_find_global_sp_dleq_proof(psbt: Ref_wally_psbt, scan_key: Buffer|Uint8Array|null): number;
+export function psbt_find_global_sp_ecdh_share(psbt: Ref_wally_psbt, scan_key: Buffer|Uint8Array|null): number;
 export function psbt_find_input_keypath(psbt: Ref_wally_psbt, index: number, key: Buffer|Uint8Array|null): number;
 export function psbt_find_input_signature(psbt: Ref_wally_psbt, index: number, pub_key: Buffer|Uint8Array|null): number;
 export function psbt_find_input_sp_dleq_proof(psbt: Ref_wally_psbt, index: number, key: Buffer|Uint8Array|null): number;

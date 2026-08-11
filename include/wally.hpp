@@ -1554,6 +1554,18 @@ inline int psbt_finalize_input(const PSBT& psbt, size_t index, uint32_t flags) {
     return detail::check_ret(__FUNCTION__, ret);
 }
 
+template <class PSBT, class SCAN_KEY>
+inline int psbt_find_global_sp_dleq_proof(const PSBT& psbt, const SCAN_KEY& scan_key, size_t* written) {
+    int ret = ::wally_psbt_find_global_sp_dleq_proof(detail::get_p(psbt), scan_key.data(), scan_key.size(), written);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT, class SCAN_KEY>
+inline int psbt_find_global_sp_ecdh_share(const PSBT& psbt, const SCAN_KEY& scan_key, size_t* written) {
+    int ret = ::wally_psbt_find_global_sp_ecdh_share(detail::get_p(psbt), scan_key.data(), scan_key.size(), written);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
 template <class PSBT, class TXHASH>
 inline int psbt_find_input_spending_utxo(const PSBT& psbt, const TXHASH& txhash, uint32_t utxo_index, size_t* written) {
     int ret = ::wally_psbt_find_input_spending_utxo(detail::get_p(psbt), txhash.data(), txhash.size(), utxo_index, written);

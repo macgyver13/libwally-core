@@ -264,6 +264,8 @@ EXPORTED_FUNCTIONS="['_malloc','_free','_bip32_key_free' \
 ,'_wally_psbt_extract' \
 ,'_wally_psbt_finalize' \
 ,'_wally_psbt_finalize_input' \
+,'_wally_psbt_find_global_sp_dleq_proof' \
+,'_wally_psbt_find_global_sp_ecdh_share' \
 ,'_wally_psbt_find_input_keypath' \
 ,'_wally_psbt_find_input_signature' \
 ,'_wally_psbt_find_input_sp_dleq_proof' \

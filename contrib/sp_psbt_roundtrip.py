@@ -197,12 +197,11 @@ def p2wpkh_script(pubkey):
     return b'\x00\x14' + bytes(hash160)
 
 
-def read_global(psbt, field_name, scan_pubkey):
+def read_global(psbt, field_name, find_fn, scan_pubkey):
     """Read a BIP-375 global keyed by the recipient's scan public key."""
-    field = getattr(psbt.contents, field_name)
-    ret, found = wally_map_find(byref(field), scan_pubkey, len(scan_pubkey))
+    ret, found = find_fn(psbt, scan_pubkey, len(scan_pubkey))
     assert ret == WALLY_OK and found, f'no {field_name} for this scan key'
-    item = field.items[found - 1]  # wally_map_find returns a 1 based index
+    item = getattr(psbt.contents, field_name).items[found - 1]  # 1 based
     return string_at(item.value, item.value_len)
 
 
@@ -276,8 +275,10 @@ def main():
     script, _ = make_cbuffer('00' * 34)
     ret, written = wally_psbt_get_output_script(psbt, 0, script, 34)
     assert ret == WALLY_OK and written == 34
-    share = read_global(psbt, 'global_sp_ecdh_shares', scan_pubkey)
-    proof = read_global(psbt, 'global_sp_dleq_proofs', scan_pubkey)
+    share = read_global(psbt, 'global_sp_ecdh_shares',
+                        wally_psbt_find_global_sp_ecdh_share, scan_pubkey)
+    proof = read_global(psbt, 'global_sp_dleq_proofs',
+                        wally_psbt_find_global_sp_dleq_proof, scan_pubkey)
     print(f'Output resolved to {bytes(script).hex()}')
 
     # -- Step 4: sign, finalize, extract --------------------------------------

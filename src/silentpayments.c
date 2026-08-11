@@ -1,4 +1,5 @@
 #include "internal.h"
+#include "psbt_io.h"
 
 #include <include/wally_crypto.h>
 #include <include/wally_psbt.h>
@@ -14,7 +15,6 @@
 #include <stdlib.h>
 
 #define SP_V0_INFO_LEN (EC_PUBLIC_KEY_LEN * 2)
-#define SP_DLEQ_PROOF_LEN 64
 /* The largest redeem script worth inspecting is a segwit witness program */
 #define SP_MAX_REDEEM_SCRIPT_LEN 42
 

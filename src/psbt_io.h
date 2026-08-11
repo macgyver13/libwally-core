@@ -37,6 +37,9 @@
 #define PSBT_GLOBAL_TX_MODIFIABLE 0x06
 #define PSBT_GLOBAL_SP_ECDH_SHARE 0x07
 #define PSBT_GLOBAL_SP_DLEQ 0x08
+
+/* A BIP375 DLEQ proof: bytes(32, e) || bytes(32, s) */
+#define SP_DLEQ_PROOF_LEN 64u
 /* VERSION and PROPRIETARY are treated specially, hence our max is the max
  * of the contiguous defined fields.
  */

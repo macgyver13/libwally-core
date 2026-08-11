@@ -48,7 +48,6 @@ static const uint8_t PSET_MAGIC[5] = {'p', 's', 'e', 't', 0xff};
 #define MASK_INDEX(index) ((index) & WALLY_TX_INDEX_MASK)
 
 #define TR_MAX_MERKLE_PATH_LEN 128u
-#define SP_DLEQ_PROOF_LEN 64u
 
 #ifdef BUILD_ELEMENTS
 /* The PSET key prefix is the same as the first 4 PSET magic bytes */
@@ -1223,10 +1222,22 @@ int wally_psbt_output_set_amount(struct wally_psbt_output *output, uint64_t amou
     return WALLY_OK;
 }
 
-SET_MAP(wally_psbt, global_sp_ecdh_share,)
-SET_MAP(wally_psbt, global_sp_dleq_proof,)
-SET_MAP(wally_psbt_input, sp_ecdh_share,)
-SET_MAP(wally_psbt_input, sp_dleq_proof,)
+/* BIP375 shares and proofs are keyed by scan pubkey, and are set one at a
+ * time as each recipient is resolved, so only set/find are provided here.
+ */
+#define SP_FIND_MAP(PARENT, NAME, FIELD) \
+    int PARENT ## _find_ ## NAME(const struct PARENT *parent, \
+                                 const unsigned char *scan_key, size_t scan_key_len, \
+                                 size_t *written) { \
+        if (written) *written = 0; \
+        if (!parent) return WALLY_EINVAL; \
+        return wally_map_find(&parent->FIELD, scan_key, scan_key_len, written); \
+    }
+
+SP_FIND_MAP(wally_psbt, global_sp_ecdh_share, global_sp_ecdh_shares)
+SP_FIND_MAP(wally_psbt, global_sp_dleq_proof, global_sp_dleq_proofs)
+SP_FIND_MAP(wally_psbt_input, sp_ecdh_share, sp_ecdh_shares)
+SP_FIND_MAP(wally_psbt_input, sp_dleq_proof, sp_dleq_proofs)
 
 int wally_psbt_input_set_sp_ecdh_share(struct wally_psbt_input *input,
                                        const unsigned char *scan_key,
