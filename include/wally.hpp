@@ -740,6 +740,12 @@ inline int descriptor_set_network(const DESCRIPTOR& descriptor, uint32_t network
     return detail::check_ret(__FUNCTION__, ret);
 }
 
+template <class BYTES, class HRP>
+inline int descriptor_sp_key_from_bytes(const BYTES& bytes, const HRP& hrp, char** output) {
+    int ret = ::wally_descriptor_sp_key_from_bytes(bytes.data(), bytes.size(), detail::get_p(hrp), output);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
 template <class DESCRIPTOR>
 inline int descriptor_to_address(const DESCRIPTOR& descriptor, uint32_t variant, uint32_t multi_index, uint32_t child_num, uint32_t flags, char** output) {
     int ret = ::wally_descriptor_to_address(detail::get_p(descriptor), variant, multi_index, child_num, flags, output);
@@ -2275,6 +2281,12 @@ inline int sha256d(const BYTES& bytes, BYTES_OUT& bytes_out) {
 template <class BYTES, class BYTES_OUT>
 inline int sha512(const BYTES& bytes, BYTES_OUT& bytes_out) {
     int ret = ::wally_sha512(bytes.data(), bytes.size(), bytes_out.data(), bytes_out.size());
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class BYTES, class ADDR_FAMILY>
+inline int sp_address_from_bytes(const BYTES& bytes, const ADDR_FAMILY& addr_family, uint32_t flags, char** output) {
+    int ret = ::wally_sp_address_from_bytes(bytes.data(), bytes.size(), detail::get_p(addr_family), flags, output);
     return detail::check_ret(__FUNCTION__, ret);
 }
 

@@ -2936,6 +2936,27 @@ static const struct {
     { "tspspend", sizeof("tspspend") - 1, BECH32M_SP_SPEND_KEY_LEN }
 };
 
+int wally_descriptor_sp_key_from_bytes(const unsigned char *bytes, size_t bytes_len,
+                                       const char *hrp, char **output)
+{
+    size_t hrp_len = hrp ? strlen(hrp) : 0, i;
+
+    if (output)
+        *output = NULL;
+    if (!bytes || !hrp_len || !output)
+        return WALLY_EINVAL;
+
+    for (i = 0; i < NUM_ELEMS(g_sp_key_hrps); ++i) {
+        if (hrp_len != g_sp_key_hrps[i].hrp_len ||
+            memcmp(hrp, g_sp_key_hrps[i].hrp, hrp_len))
+            continue;
+        if (bytes_len != g_sp_key_hrps[i].payload_len)
+            return WALLY_EINVAL; /* Wrong payload length for this key type */
+        return bech32m_sp_from_bytes(bytes, bytes_len, hrp, hrp_len, output);
+    }
+    return WALLY_EINVAL; /* Not a BIP-392 key expression type */
+}
+
 /* Validate a BIP-392 key expression, leaving the node holding the original
  * bech32m text (as is done for bip32 keys, which are also kept as text).
  */
