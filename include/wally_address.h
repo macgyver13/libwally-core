@@ -49,6 +49,26 @@ struct ext_key;
 #define WALLY_SEGWIT_V0_ADDRESS_PUBKEY_MAX_LEN 34 /** OP_0 OP_PUSH_{20,32} [20 bytes for wpkh, 32 for wsh] */
 #define WALLY_SEGWIT_V1_ADDRESS_PUBKEY_LEN 34 /** OP_1 OP_PUSH_32 [32-bytes x-only pubkey] */
 
+#define WALLY_SP_V0_INFO_LEN 66 /** BIP-352 serP(B_scan) || serP(B_spend) */
+
+/**
+ * Create a BIP-352 silent payment address.
+ *
+ * :param bytes: The recipient's scan and spend public keys, as carried in
+ *|    a PSBT's ``PSBT_OUT_SP_V0_INFO`` field.
+ * :param bytes_len: Length of ``bytes`` in bytes. Must be `WALLY_SP_V0_INFO_LEN`.
+ * :param addr_family: Address family to generate, either "sp" or "tsp".
+ * :param flags: For future use. Must be 0.
+ * :param output: Destination for the resulting silent payment address string.
+ *|    The string returned should be freed using `wally_free_string`.
+ */
+WALLY_CORE_API int wally_sp_address_from_bytes(
+    const unsigned char *bytes,
+    size_t bytes_len,
+    const char *addr_family,
+    uint32_t flags,
+    char **output);
+
 /**
  * Create a segwit native address from a v0 or later witness program.
  *
