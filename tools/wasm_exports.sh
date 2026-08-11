@@ -122,6 +122,7 @@ EXPORTED_FUNCTIONS="['_malloc','_free','_bip32_key_free' \
 ,'_wally_descriptor_parse' \
 ,'_wally_descriptor_set_network' \
 ,'_wally_descriptor_sp_key_from_bytes' \
+,'_wally_descriptor_sp_key_to_bytes' \
 ,'_wally_descriptor_to_address' \
 ,'_wally_descriptor_to_addresses' \
 ,'_wally_descriptor_to_script' \

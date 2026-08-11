@@ -746,6 +746,12 @@ inline int descriptor_sp_key_from_bytes(const BYTES& bytes, const HRP& hrp, char
     return detail::check_ret(__FUNCTION__, ret);
 }
 
+template <class KEY_EXPRESSION, class BYTES_OUT>
+inline int descriptor_sp_key_to_bytes(const KEY_EXPRESSION& key_expression, BYTES_OUT& bytes_out, size_t* written) {
+    int ret = ::wally_descriptor_sp_key_to_bytes(detail::get_p(key_expression), bytes_out.data(), bytes_out.size(), written);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
 template <class DESCRIPTOR>
 inline int descriptor_to_address(const DESCRIPTOR& descriptor, uint32_t variant, uint32_t multi_index, uint32_t child_num, uint32_t flags, char** output) {
     int ret = ::wally_descriptor_to_address(detail::get_p(descriptor), variant, multi_index, child_num, flags, output);
