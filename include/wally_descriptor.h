@@ -96,6 +96,29 @@ WALLY_CORE_API int wally_descriptor_canonicalize(
     char **output);
 
 /**
+ * Create a BIP-392 silent payment key expression.
+ *
+ * :param bytes: The key payload: ``ser256(b_scan) || serP(B_spend)`` for a
+ *|    scan key expression, or ``ser256(b_scan) || ser256(b_spend)`` for a
+ *|    spend key expression.
+ * :param bytes_len: Length of ``bytes`` in bytes, which must match ``hrp``.
+ * :param hrp: The key expression type: "spscan", "tspscan", "spspend" or
+ *|    "tspspend".
+ * :param output: Destination for the resulting key expression, suitable for
+ *|    use in an ``sp()`` descriptor. The string returned should be freed
+ *|    using `wally_free_string`.
+ *
+ * .. note:: Both key expression types contain the scan *private* key, so the
+ *|    result is sensitive: an spscan key allows a wallet's payments to be
+ *|    found, and an spspend key allows them to be spent.
+ */
+WALLY_CORE_API int wally_descriptor_sp_key_from_bytes(
+    const unsigned char *bytes,
+    size_t bytes_len,
+    const char *hrp,
+    char **output);
+
+/**
  * Create an output descriptor checksum.
  *
  * :param descriptor: Parsed output descriptor or miniscript expression.
