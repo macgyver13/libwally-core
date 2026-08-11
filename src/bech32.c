@@ -167,6 +167,31 @@ static int convert_bits(uint8_t *out, size_t *outlen, int outbits, const uint8_t
     return 1;
 }
 
+int bech32m_sp_from_bytes(const unsigned char *bytes, size_t bytes_len,
+                          const char *hrp, size_t hrp_len, char **output) {
+    uint8_t data[BECH32M_SP_KEY_MAX_LEN];
+    char result[BECH32M_SP_KEY_MAX_LEN];
+    size_t data_len = 0;
+    int ret = WALLY_EINVAL;
+
+    if (output)
+        *output = NULL;
+    if (!bytes || !bytes_len || bytes_len > BECH32M_SP_MAX_PAYLOAD_LEN ||
+        !hrp || !hrp_len || !output)
+        return WALLY_EINVAL;
+
+    data[0] = 0; /* Silent payments v0 */
+    if (!convert_bits(data + 1, &data_len, 5, bytes, bytes_len, 8, 1) ||
+        !bech32_encode(result, hrp, hrp_len, data, data_len + 1,
+                       BECH32M_SP_KEY_MAX_LEN, true))
+        goto fail;
+
+    ret = (*output = wally_strdup(result)) ? WALLY_OK : WALLY_ENOMEM;
+fail:
+    wally_clear_2(data, sizeof(data), result, sizeof(result));
+    return ret;
+}
+
 int bech32m_sp_key_to_bytes(const char *str, size_t str_len,
                             const char *hrp, size_t hrp_len,
                             unsigned char *bytes_out, size_t len) {
@@ -240,6 +265,27 @@ static int segwit_addr_decode(uint8_t *witver, uint8_t *witdata, size_t *witdata
 fail:
     wally_clear_2(data, sizeof(data), hrp_actual, sizeof(hrp_actual));
     return 0;
+}
+
+int wally_sp_address_from_bytes(const unsigned char *bytes, size_t bytes_len,
+                                const char *addr_family, uint32_t flags,
+                                char **output)
+{
+    size_t addr_family_len = addr_family ? strlen(addr_family) : 0;
+
+    if (output)
+        *output = NULL;
+
+    if (!addr_family || flags || bytes_len != WALLY_SP_V0_INFO_LEN || !output)
+        return WALLY_EINVAL;
+
+    /* Silent payment addresses are only defined for mainnet and test networks */
+    if ((addr_family_len != 2 || memcmp(addr_family, "sp", 2)) &&
+        (addr_family_len != 3 || memcmp(addr_family, "tsp", 3)))
+        return WALLY_EINVAL;
+
+    return bech32m_sp_from_bytes(bytes, bytes_len, addr_family,
+                                 addr_family_len, output);
 }
 
 int wally_addr_segwit_from_bytes(const unsigned char *bytes, size_t bytes_len,
