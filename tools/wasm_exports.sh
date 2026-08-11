@@ -313,6 +313,7 @@ EXPORTED_FUNCTIONS="['_malloc','_free','_bip32_key_free' \
 ,'_wally_psbt_get_input_sp_ecdh_share' \
 ,'_wally_psbt_get_input_sp_ecdh_share_len' \
 ,'_wally_psbt_get_input_sp_ecdh_shares_size' \
+,'_wally_psbt_get_input_sp_eligible' \
 ,'_wally_psbt_get_input_taproot_internal_key' \
 ,'_wally_psbt_get_input_taproot_internal_key_len' \
 ,'_wally_psbt_get_input_taproot_signature' \
@@ -347,6 +348,7 @@ EXPORTED_FUNCTIONS="['_malloc','_free','_bip32_key_free' \
 ,'_wally_psbt_get_output_unknowns_size' \
 ,'_wally_psbt_get_output_witness_script' \
 ,'_wally_psbt_get_output_witness_script_len' \
+,'_wally_psbt_get_sp_smallest_outpoint' \
 ,'_wally_psbt_get_tx_modifiable_flags' \
 ,'_wally_psbt_get_tx_version' \
 ,'_wally_psbt_get_version' \
@@ -461,6 +463,7 @@ EXPORTED_FUNCTIONS="['_malloc','_free','_bip32_key_free' \
 ,'_wally_psbt_sign_input_bip32' \
 ,'_wally_psbt_signing_cache_disable' \
 ,'_wally_psbt_signing_cache_enable' \
+,'_wally_psbt_sp_resolve' \
 ,'_wally_psbt_to_base64' \
 ,'_wally_psbt_to_bytes' \
 ,'_wally_ripemd160' \
