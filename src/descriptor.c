@@ -2957,6 +2957,39 @@ int wally_descriptor_sp_key_from_bytes(const unsigned char *bytes, size_t bytes_
     return WALLY_EINVAL; /* Not a BIP-392 key expression type */
 }
 
+int wally_descriptor_sp_key_to_bytes(const char *key_expression,
+                                     unsigned char *bytes_out, size_t len,
+                                     size_t *written)
+{
+    size_t key_len = key_expression ? strlen(key_expression) : 0, hrp_len, i;
+    const char *hrp_end;
+
+    if (written)
+        *written = 0;
+    if (!key_expression || !key_len || !bytes_out || !written)
+        return WALLY_EINVAL;
+
+    hrp_end = memchr(key_expression, '1', key_len);
+    if (!hrp_end)
+        return WALLY_EINVAL; /* No bech32m separator */
+    hrp_len = hrp_end - key_expression;
+
+    for (i = 0; i < NUM_ELEMS(g_sp_key_hrps); ++i) {
+        if (hrp_len != g_sp_key_hrps[i].hrp_len ||
+            memcmp(key_expression, g_sp_key_hrps[i].hrp, hrp_len))
+            continue;
+        if (len < g_sp_key_hrps[i].payload_len)
+            return WALLY_EINVAL; /* Output buffer too small for this key type */
+        if (bech32m_sp_key_to_bytes(key_expression, key_len,
+                                    g_sp_key_hrps[i].hrp, hrp_len,
+                                    bytes_out, g_sp_key_hrps[i].payload_len) != WALLY_OK)
+            return WALLY_EINVAL;
+        *written = g_sp_key_hrps[i].payload_len;
+        return WALLY_OK;
+    }
+    return WALLY_EINVAL; /* Not a BIP-392 key expression type */
+}
+
 /* Validate a BIP-392 key expression, leaving the node holding the original
  * bech32m text (as is done for bip32 keys, which are also kept as text).
  */

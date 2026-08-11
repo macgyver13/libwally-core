@@ -154,6 +154,7 @@ export function descriptor_get_taproot_num_leaves(descriptor: Ref_wally_descript
 export function descriptor_parse(descriptor: string, vars_in: Ref_wally_map, network: number, flags: number): Ref_wally_descriptor;
 export function descriptor_set_network(descriptor: Ref_wally_descriptor, network: number): void;
 export function descriptor_sp_key_from_bytes(bytes: Buffer|Uint8Array|null, hrp: string): string;
+export function descriptor_sp_key_to_bytes(key_expression: string): Buffer;
 export function descriptor_to_address(descriptor: Ref_wally_descriptor, variant: number, multi_index: number, child_num: number, flags: number): string;
 export function descriptor_to_addresses(descriptor: Ref_wally_descriptor, variant: number, multi_index: number, child_num: number, flags: number, out_len: number): string;
 export function descriptor_to_script_get_maximum_length(descriptor: Ref_wally_descriptor, depth: number, index: number, variant: number, multi_index: number, child_num: number, flags: number): number;
