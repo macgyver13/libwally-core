@@ -157,6 +157,7 @@ descriptor_get_taproot_control_block = _wrap_bin(descriptor_get_taproot_control_
 descriptor_get_taproot_leaf_hash = _wrap_bin(descriptor_get_taproot_leaf_hash, SHA256_LEN)
 descriptor_get_taproot_leaf_script = _wrap_bin(descriptor_get_taproot_leaf_script, descriptor_get_taproot_leaf_script_len)
 descriptor_get_taproot_merkle_root = _wrap_bin(descriptor_get_taproot_merkle_root, SHA256_LEN)
+descriptor_sp_key_to_bytes = _wrap_bin(descriptor_sp_key_to_bytes, WALLY_SP_SCAN_KEY_LEN, resize=True)
 descriptor_to_script = _wrap_bin(descriptor_to_script, descriptor_to_script_get_maximum_length, resize=True)
 ec_private_key_bip341_tweak = _wrap_bin(ec_private_key_bip341_tweak, EC_PRIVATE_KEY_LEN)
 ec_public_key_bip341_tweak = _wrap_bin(ec_public_key_bip341_tweak, EC_PUBLIC_KEY_LEN)

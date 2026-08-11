@@ -803,6 +803,21 @@ class DescriptorTests(unittest.TestCase):
             self.assertEqual(ret, WALLY_OK, key_str)
             wally_descriptor_free(d)
 
+        # And the round trip back to the payload
+        for key_str, expected, expected_len in [(spscan, scan_key, scan_key_len),
+                                                (tspscan, scan_key, scan_key_len),
+                                                (spspend, spend_key, spend_key_len)]:
+            out, out_len = make_cbuffer('00' * 65)
+            ret, written = wally_descriptor_sp_key_to_bytes(utf8(key_str), out, out_len)
+            self.assertEqual((ret, written), (WALLY_OK, expected_len))
+            self.assertEqual(h(out[:written]), h(expected[:expected_len]))
+
+        for args in [(None, None, 65), (utf8(spscan), None, 65),
+                     (utf8(spscan), make_cbuffer('00' * 65)[0], 64),   # Buffer too small
+                     (utf8('spqqq1qqq'), make_cbuffer('00' * 65)[0], 65),  # Unknown type
+                     (utf8('not a key'), make_cbuffer('00' * 65)[0], 65)]:
+            self.assertEqual(wally_descriptor_sp_key_to_bytes(*args), (WALLY_EINVAL, 0))
+
         for args in [(None, scan_key_len, utf8('spscan')),        # Missing payload
                      (scan_key, spend_key_len, utf8('spscan')),   # Wrong length for hrp
                      (spend_key, spend_key_len, utf8('spscan')),  # Wrong length for hrp

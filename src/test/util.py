@@ -350,6 +350,7 @@ for f in (
     ('wally_descriptor_parse', c_int, [c_char_p, POINTER(wally_map), c_uint32, c_uint32, POINTER(c_void_p)]),
     ('wally_descriptor_set_network', c_int, [c_void_p, c_uint32]),
     ('wally_descriptor_sp_key_from_bytes', c_int, [c_void_p, c_size_t, c_char_p, c_char_p_p]),
+    ('wally_descriptor_sp_key_to_bytes', c_int, [c_char_p, c_void_p, c_size_t, c_size_t_p]),
     ('wally_descriptor_to_address', c_int, [c_void_p, c_uint32, c_uint32, c_uint32, c_uint32, c_char_p_p]),
     ('wally_descriptor_to_addresses', c_int, [c_void_p, c_uint32, c_uint32, c_uint32, c_uint32, POINTER(c_char_p), c_size_t]),
     ('wally_descriptor_to_script', c_int, [c_void_p, c_uint32, c_uint32, c_uint32, c_uint32, c_uint32, c_uint32, c_void_p, c_size_t, c_size_t_p]),
