@@ -19,9 +19,9 @@ flat secp256k1 primitives (parse/serialize/combine/tweak_mul) rather than the
 secp256k1_silentpayments module, so they are an independent implementation of
 BIP-352 that can be used to check one that is not.
 
-TODO: steps 2-3 are the sender side that libwally does not expose yet. When a
-wally_psbt_sp_* sender API lands, sp_derive_output()/sp_ecdh_share() here
-become one call and this file documents that API instead.
+Step 3 uses wally_psbt_sp_resolve(); the sp_derive_output() helper below is
+kept as an independent second implementation, and the demo asserts that the
+two agree.
 """
 import hashlib
 import os
@@ -60,13 +60,6 @@ def _fn(name, argtypes, restype=c_int):
     fn.restype, fn.argtypes = restype, argtypes
     return fn
 
-
-_psbt_set_output_sp_v0_info = _fn('wally_psbt_set_output_sp_v0_info',
-                                  [POINTER(wally_psbt), c_size_t, c_void_p, c_size_t])
-_psbt_set_global_sp_ecdh_share = _fn('wally_psbt_set_global_sp_ecdh_share',
-                                     [POINTER(wally_psbt), c_void_p, c_size_t, c_void_p, c_size_t])
-_psbt_set_global_sp_dleq_proof = _fn('wally_psbt_set_global_sp_dleq_proof',
-                                     [POINTER(wally_psbt), c_void_p, c_size_t, c_void_p, c_size_t])
 
 _secp_context = _fn('wally_get_secp_context', [], c_void_p)
 _pubkey_parse = _fn('secp256k1_ec_pubkey_parse', [c_void_p, c_void_p, c_void_p, c_size_t])
@@ -365,6 +358,17 @@ FINGERPRINT = bytes([0x00] * 4)
 INPUT_AMOUNT, OUTPUT_AMOUNT = 100000, 90000
 
 
+def read_share(psbt, scan_pubkey):
+    """Read the BIP-375 global share and proof for a recipient's scan key."""
+    values = []
+    for field in (psbt.contents.global_sp_ecdh_shares, psbt.contents.global_sp_dleq_proofs):
+        ret, found = wally_map_find(byref(field), scan_pubkey, len(scan_pubkey))
+        assert ret == WALLY_OK and found, 'no BIP-375 global for this scan key'
+        item = field.items[found - 1]  # wally_map_find returns a 1 based index
+        values.append(string_at(item.value, item.value_len))
+    return values[0], values[1]
+
+
 def p2wpkh_script(pubkey):
     hash160, _ = make_cbuffer('00' * 20)
     assert wally_hash160(pubkey, len(pubkey), hash160, 20) == WALLY_OK
@@ -417,20 +421,33 @@ def main():
     assert wally_tx_output_init_alloc(OUTPUT_AMOUNT, None, 0, tx_output) == WALLY_OK
     assert wally_psbt_add_tx_output_at(psbt, 0, 0, tx_output) == WALLY_OK
     assert wally_psbt_set_output_amount(psbt, 0, OUTPUT_AMOUNT) == WALLY_OK
-    assert _psbt_set_output_sp_v0_info(psbt, 0, recipient_info,
-                                       len(recipient_info)) == WALLY_OK
+    assert wally_psbt_set_output_sp_v0_info(psbt, 0, recipient_info,
+                                            len(recipient_info)) == WALLY_OK
     print(f'PSBT built with {len(SENDER_PRIVKEYS)} inputs and 1 silent payment output')
 
     # -- Step 3: the sender resolves the output and shares the secret ---------
-    script, summed_privkey = sp_derive_output(recipient_info, SENDER_PRIVKEYS, outpoints)
-    assert wally_psbt_set_output_script(psbt, 0, script, len(script)) == WALLY_OK
+    # One private key per eligible input, in input order. wally derives the
+    # BIP-352 outputs, stores them as scriptPubKeys, and writes the BIP-375
+    # global ECDH share and DLEQ proof.
+    for index in range(len(SENDER_PRIVKEYS)):
+        ret, eligible = wally_psbt_get_input_sp_eligible(psbt, index)
+        assert (ret, eligible) == (WALLY_OK, 1), f'input {index} is not eligible'
 
-    share, proof = sp_ecdh_share(scan_pubkey, summed_privkey)
-    assert _psbt_set_global_sp_ecdh_share(psbt, scan_pubkey, len(scan_pubkey), share,
-                                          len(share)) == WALLY_OK
-    assert _psbt_set_global_sp_dleq_proof(psbt, scan_pubkey, len(scan_pubkey), proof,
-                                          len(proof)) == WALLY_OK
+    priv_keys = b''.join(SENDER_PRIVKEYS)
+    entropy = os.urandom(32)
+    assert wally_psbt_sp_resolve(psbt, priv_keys, len(priv_keys),
+                                 entropy, len(entropy), 0) == WALLY_OK
+
+    script, _ = make_cbuffer('00' * 34)
+    ret, written = wally_psbt_get_output_script(psbt, 0, script, 34)
+    assert ret == WALLY_OK and written == 34
+    script = bytes(script)
+    share, proof = read_share(psbt, scan_pubkey)
     print(f'Output resolved to {script.hex()}')
+
+    # The same derivation done here, as a check on what wally just wrote
+    expected, _ = sp_derive_output(recipient_info, SENDER_PRIVKEYS, outpoints)
+    assert script == expected, 'wally and this file disagree on the output'
 
     # -- Step 4: sign, finalize, extract --------------------------------------
     for privkey in SENDER_PRIVKEYS:
