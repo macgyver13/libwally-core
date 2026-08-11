@@ -1,5 +1,6 @@
 #include "internal.h"
 
+#include "bech32_int.h"
 #include "script.h"
 #include "script_int.h"
 
@@ -70,6 +71,7 @@
 #define KIND_BIP32               (0x004000 | KIND_KEY)
 #define KIND_BIP32_PRIVATE_KEY   (0x010000 | KIND_BIP32)
 #define KIND_BIP32_PUBLIC_KEY    (0x020000 | KIND_BIP32)
+#define KIND_SP_KEY              (0x040000 | KIND_KEY) /* BIP-392 spscan/spspend */
 
 #define DESCRIPTOR_MIN_SIZE     20
 #define MINISCRIPT_MULTI_MAX    20
@@ -95,6 +97,7 @@
 #define KIND_DESCRIPTOR_CT       (0x00300000 | KIND_DESCRIPTOR)
 #define KIND_DESCRIPTOR_SLIP77   (0x00400000 | KIND_DESCRIPTOR)
 #define KIND_DESCRIPTOR_ELIP151  (0x00500000 | KIND_DESCRIPTOR)
+#define KIND_DESCRIPTOR_SP       (0x00600000 | KIND_DESCRIPTOR)
 
 /* miniscript */
 #define KIND_MINISCRIPT_PK        (0x00000100 | KIND_MINISCRIPT)
@@ -761,6 +764,19 @@ static int verify_addr(ms_ctx *ctx, ms_node *node)
 {
     (void)ctx;
     if (node->parent || node->child->builtin || !(node->child->kind & KIND_ADDRESS))
+        return WALLY_EINVAL;
+    return WALLY_OK;
+}
+
+static int verify_sp(ms_ctx *ctx, ms_node *node)
+{
+    (void)ctx;
+    /* TODO: Support the BIP-392 two argument form sp(scan_key,spend_key).
+     * Only the single spscan/spspend key expression is accepted for now, so
+     * the builtin child count of 1 rejects the two argument form for us.
+     */
+    if (!node_is_top(node) || node->child->builtin ||
+        node->child->kind != KIND_SP_KEY)
         return WALLY_EINVAL;
     return WALLY_OK;
 }
@@ -1536,6 +1552,21 @@ static int generate_raw(ms_ctx *ctx, ms_node *node,
     return *written > REDEEM_SCRIPT_MAX_SIZE ?  WALLY_EINVAL : ret;
 }
 
+static int generate_sp(ms_ctx *ctx, ms_node *node,
+                       unsigned char *script, size_t script_len, size_t *written)
+{
+    (void)ctx;
+    (void)node;
+    (void)script;
+    (void)script_len;
+    (void)written;
+    /* TODO: BIP-352 output scripts are derived from the sender's input public
+     * keys and outpoints, neither of which are available to a descriptor, so
+     * sp() cannot generate a scriptPubKey on its own.
+     */
+    return WALLY_ERROR;
+}
+
 static int generate_raw_tr(ms_ctx *ctx, ms_node *node,
                            unsigned char *script, size_t script_len, size_t *written)
 {
@@ -2008,6 +2039,11 @@ static const struct ms_builtin_t g_builtins[] = {
         KIND_DESCRIPTOR_TR,
         TYPE_NONE,
         0xffffffff, verify_tr, generate_tr
+    }, {   /* BIP-392 silent payments */
+        I_NAME("sp"),
+        KIND_DESCRIPTOR_SP,
+        TYPE_NONE,
+        1, verify_sp, generate_sp
     },
     /* miniscript */
     {
@@ -2288,6 +2324,55 @@ static int analyze_address(ms_ctx *ctx, const char *str, size_t str_len,
     return ret;
 }
 
+/* The BIP-392 silent payment key expressions. The scan key is private in both
+ * cases; spscan pairs it with a public spend key, spspend with a private one.
+ */
+static const struct {
+    const char *hrp;
+    size_t hrp_len;
+    size_t payload_len;
+} g_sp_key_hrps[] = {
+    { "spscan", sizeof("spscan") - 1, BECH32M_SP_SCAN_KEY_LEN },
+    { "tspscan", sizeof("tspscan") - 1, BECH32M_SP_SCAN_KEY_LEN },
+    { "spspend", sizeof("spspend") - 1, BECH32M_SP_SPEND_KEY_LEN },
+    { "tspspend", sizeof("tspspend") - 1, BECH32M_SP_SPEND_KEY_LEN }
+};
+
+/* Validate a BIP-392 key expression, leaving the node holding the original
+ * bech32m text (as is done for bip32 keys, which are also kept as text).
+ */
+static int analyze_sp_key(ms_ctx *ctx, ms_node *node)
+{
+    unsigned char key[BECH32M_SP_KEY_MAX_PAYLOAD_LEN];
+    const char *hrp_end;
+    size_t hrp_len, i;
+    int ret = WALLY_EINVAL;
+
+    /* Bech32m excludes '1' from its charset, so the first '1' is the separator */
+    if (!(hrp_end = memchr(node->data, '1', node->data_len)))
+        return WALLY_EINVAL; /* Not a bech32m key expression */
+    hrp_len = hrp_end - node->data;
+
+    for (i = 0; i < NUM_ELEMS(g_sp_key_hrps); ++i) {
+        if (hrp_len == g_sp_key_hrps[i].hrp_len &&
+            !memcmp(node->data, g_sp_key_hrps[i].hrp, hrp_len)) {
+            ret = bech32m_sp_key_to_bytes(node->data, node->data_len,
+                                          g_sp_key_hrps[i].hrp, hrp_len,
+                                          key, g_sp_key_hrps[i].payload_len);
+            break;
+        }
+    }
+    wally_clear(key, sizeof(key)); /* Only the validation result is needed */
+    if (ret != WALLY_OK)
+        return ret;
+
+    node->kind = KIND_SP_KEY;
+    /* The scan key is private, and cannot be derived from */
+    node->flags |= (WALLY_MS_IS_PRIVATE | WALLY_MS_IS_RAW);
+    ctx->features |= (WALLY_MS_IS_PRIVATE | WALLY_MS_IS_RAW);
+    return ctx_add_key_node(ctx, node);
+}
+
 /* take the possible hex data in node->data, if it is a valid key then
  * convert it to an allocated binary buffer and make this node a key node
  */
@@ -2418,6 +2503,12 @@ static int analyze_miniscript_key(ms_ctx *ctx, uint32_t flags,
         node->data = end + 1;
         node->data_len -= size;
     }
+
+    /* Check for a BIP-392 silent payment key. Gated on the parent being sp(),
+     * since these keys are not valid under any other script expression.
+     */
+    if (parent && parent->kind == KIND_DESCRIPTOR_SP)
+        return analyze_sp_key(ctx, node);
 
     /* Check for a hex public key (hex private keys allowed for ct() only) */
     ret = analyze_key_hex(ctx, node, flags, is_ct_key, &is_hex);
@@ -2784,7 +2875,8 @@ static int node_generation_size(const ms_node *node, size_t *total)
              */
             *total += 1;
         case KIND_DESCRIPTOR_ADDR:
-            /* No-op */
+        case KIND_DESCRIPTOR_SP:
+            /* No-op: sp() cannot generate a script, see generate_sp() */
             break;
         case KIND_DESCRIPTOR_RAW_TR:
         case KIND_DESCRIPTOR_TR:
@@ -2851,6 +2943,8 @@ static int node_generation_size(const ms_node *node, size_t *total)
             *total += EC_XONLY_PUBLIC_KEY_LEN;
         else
             *total += EC_PUBLIC_KEY_LEN;
+    } else if (node->kind == KIND_SP_KEY) {
+        /* No-op: sp() cannot generate a script, see generate_sp() */
     } else
         return WALLY_ERROR; /* Should not happen */
 
@@ -3448,8 +3542,9 @@ return_hex:
                                     descriptor->addr_ver->version_wif,
                                     flags, output);
     }
-    if ((node->kind & KIND_BIP32) != KIND_BIP32)
+    if (node->kind != KIND_SP_KEY && (node->kind & KIND_BIP32) != KIND_BIP32)
         return WALLY_ERROR; /* Unknown key type, should not happen */
+    /* bip32 and BIP-392 keys are returned as their original text */
     if (!(*output = wally_strdup_n(node->data, node->data_len)))
         return WALLY_ENOMEM;
     return WALLY_OK;
