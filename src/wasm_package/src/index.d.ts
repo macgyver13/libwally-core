@@ -349,6 +349,7 @@ export function psbt_get_input_sp_dleq_proof_len(psbt: Ref_wally_psbt, index: nu
 export function psbt_get_input_sp_dleq_proofs_size(psbt: Ref_wally_psbt, index: number): number;
 export function psbt_get_input_sp_ecdh_share_len(psbt: Ref_wally_psbt, index: number, subindex: number): number;
 export function psbt_get_input_sp_ecdh_shares_size(psbt: Ref_wally_psbt, index: number): number;
+export function psbt_get_input_sp_eligible(psbt: Ref_wally_psbt, index: number): number;
 export function psbt_get_input_taproot_internal_key_len(psbt: Ref_wally_psbt, index: number): number;
 export function psbt_get_input_taproot_signature_len(psbt: Ref_wally_psbt, index: number): number;
 export function psbt_get_input_unknown_len(psbt: Ref_wally_psbt, index: number, subindex: number): number;
@@ -384,6 +385,7 @@ export function psbt_get_output_value_commitment_len(psbt: Ref_wally_psbt, index
 export function psbt_get_output_value_rangeproof_len(psbt: Ref_wally_psbt, index: number): number;
 export function psbt_get_output_witness_script_len(psbt: Ref_wally_psbt, index: number): number;
 export function psbt_get_pset_modifiable_flags(psbt: Ref_wally_psbt): number;
+export function psbt_get_sp_smallest_outpoint(psbt: Ref_wally_psbt): Buffer;
 export function psbt_get_tx_modifiable_flags(psbt: Ref_wally_psbt): number;
 export function psbt_get_tx_version(psbt: Ref_wally_psbt): number;
 export function psbt_get_version(psbt: Ref_wally_psbt): number;
@@ -592,6 +594,7 @@ export function psbt_sign_bip32(psbt: Ref_wally_psbt, hdkey: Ref_ext_key, flags:
 export function psbt_sign_input_bip32(psbt: Ref_wally_psbt, index: number, subindex: number, txhash: Buffer|Uint8Array|null, hdkey: Ref_ext_key, flags: number): void;
 export function psbt_signing_cache_disable(psbt: Ref_wally_psbt): void;
 export function psbt_signing_cache_enable(psbt: Ref_wally_psbt, flags: number): void;
+export function psbt_sp_resolve(psbt: Ref_wally_psbt, priv_keys: Buffer|Uint8Array|null, entropy: Buffer|Uint8Array|null, flags: number): void;
 export function psbt_to_base64(psbt: Ref_wally_psbt, flags: number): string;
 export function ripemd160(bytes: Buffer|Uint8Array|null): Buffer;
 export function s2c_commitment_verify(sig: Buffer|Uint8Array|null, s2c_data: Buffer|Uint8Array|null, s2c_opening: Buffer|Uint8Array|null, flags: number): void;
