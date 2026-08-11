@@ -180,6 +180,7 @@ export const descriptor_get_num_variants = wrap('wally_descriptor_get_num_varian
 export const descriptor_parse = wrap('wally_descriptor_parse', [T.String, T.OpaqueRef, T.Int32, T.Int32, T.DestPtrPtr(T.OpaqueRef)]);
 export const descriptor_set_network = wrap('wally_descriptor_set_network', [T.OpaqueRef, T.Int32]);
 export const descriptor_sp_key_from_bytes = wrap('wally_descriptor_sp_key_from_bytes', [T.Bytes, T.String, T.DestPtrPtr(T.String)]);
+export const descriptor_sp_key_to_bytes = wrap('wally_descriptor_sp_key_to_bytes', [T.String, T.DestPtrVarLen(T.Bytes, C.WALLY_SP_SCAN_KEY_LEN, true)]);
 export const descriptor_to_address = wrap('wally_descriptor_to_address', [T.OpaqueRef, T.Int32, T.Int32, T.Int32, T.Int32, T.DestPtrPtr(T.String)]);
 export const descriptor_to_addresses = wrap('wally_descriptor_to_addresses', [T.OpaqueRef, T.Int32, T.Int32, T.Int32, T.Int32, T.DestPtrSized(T.String, T.USER_PROVIDED_LEN)]);
 export const descriptor_to_script_get_maximum_length = wrap('wally_descriptor_to_script_get_maximum_length', [T.OpaqueRef, T.Int32, T.Int32, T.Int32, T.Int32, T.Int32, T.Int32, T.DestPtr(T.Int32)]);
