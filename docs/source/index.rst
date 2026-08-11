@@ -17,6 +17,7 @@ libwally-core documentation
    psbt
    script
    descriptor
+   silentpayments
    symmetric
    transaction
    elements
