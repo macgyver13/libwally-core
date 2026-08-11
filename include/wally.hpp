@@ -1638,6 +1638,12 @@ inline int psbt_get_input_signing_script_len(const PSBT& psbt, size_t index, siz
 }
 
 template <class PSBT>
+inline int psbt_get_input_sp_eligible(const PSBT& psbt, size_t index, size_t* written) {
+    int ret = ::wally_psbt_get_input_sp_eligible(detail::get_p(psbt), index, written);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT>
 inline int psbt_get_length(const PSBT& psbt, uint32_t flags, size_t* written) {
     int ret = ::wally_psbt_get_length(detail::get_p(psbt), flags, written);
     return detail::check_ret(__FUNCTION__, ret);
@@ -1646,6 +1652,12 @@ inline int psbt_get_length(const PSBT& psbt, uint32_t flags, size_t* written) {
 template <class PSBT>
 inline int psbt_get_locktime(const PSBT& psbt, size_t* written) {
     int ret = ::wally_psbt_get_locktime(detail::get_p(psbt), written);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT, class BYTES_OUT>
+inline int psbt_get_sp_smallest_outpoint(const PSBT& psbt, BYTES_OUT& bytes_out) {
+    int ret = ::wally_psbt_get_sp_smallest_outpoint(detail::get_p(psbt), bytes_out.data(), bytes_out.size());
     return detail::check_ret(__FUNCTION__, ret);
 }
 
@@ -2126,6 +2138,12 @@ inline int psbt_signing_cache_disable(struct wally_psbt* psbt) {
 template <class PSBT>
 inline int psbt_signing_cache_enable(const PSBT& psbt, uint32_t flags) {
     int ret = ::wally_psbt_signing_cache_enable(detail::get_p(psbt), flags);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT, class PRIV_KEYS, class ENTROPY>
+inline int psbt_sp_resolve(const PSBT& psbt, const PRIV_KEYS& priv_keys, const ENTROPY& entropy, uint32_t flags) {
+    int ret = ::wally_psbt_sp_resolve(detail::get_p(psbt), priv_keys.data(), priv_keys.size(), entropy.data(), entropy.size(), flags);
     return detail::check_ret(__FUNCTION__, ret);
 }
 
