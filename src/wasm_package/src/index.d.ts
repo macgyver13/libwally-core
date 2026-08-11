@@ -153,6 +153,7 @@ export function descriptor_get_taproot_merkle_root(descriptor: Ref_wally_descrip
 export function descriptor_get_taproot_num_leaves(descriptor: Ref_wally_descriptor): number;
 export function descriptor_parse(descriptor: string, vars_in: Ref_wally_map, network: number, flags: number): Ref_wally_descriptor;
 export function descriptor_set_network(descriptor: Ref_wally_descriptor, network: number): void;
+export function descriptor_sp_key_from_bytes(bytes: Buffer|Uint8Array|null, hrp: string): string;
 export function descriptor_to_address(descriptor: Ref_wally_descriptor, variant: number, multi_index: number, child_num: number, flags: number): string;
 export function descriptor_to_addresses(descriptor: Ref_wally_descriptor, variant: number, multi_index: number, child_num: number, flags: number, out_len: number): string;
 export function descriptor_to_script_get_maximum_length(descriptor: Ref_wally_descriptor, depth: number, index: number, variant: number, multi_index: number, child_num: number, flags: number): number;
@@ -681,6 +682,7 @@ export function sha256(bytes: Buffer|Uint8Array|null): Buffer;
 export function sha256_midstate(bytes: Buffer|Uint8Array|null): Buffer;
 export function sha256d(bytes: Buffer|Uint8Array|null): Buffer;
 export function sha512(bytes: Buffer|Uint8Array|null): Buffer;
+export function sp_address_from_bytes(bytes: Buffer|Uint8Array|null, addr_family: string, flags: number): string;
 export function symmetric_key_from_parent(bytes: Buffer|Uint8Array|null, version: number, label: Buffer|Uint8Array|null): Buffer;
 export function symmetric_key_from_seed(bytes: Buffer|Uint8Array|null): Buffer;
 export function tx_add_elements_raw_input(tx: Ref_wally_tx, txhash: Buffer|Uint8Array|null, utxo_index: number, sequence: number, script: Buffer|Uint8Array|null, witness: Ref_wally_tx_witness_stack, nonce: Buffer|Uint8Array|null, entropy: Buffer|Uint8Array|null, issuance_amount: Buffer|Uint8Array|null, inflation_keys: Buffer|Uint8Array|null, issuance_amount_rangeproof: Buffer|Uint8Array|null, inflation_keys_rangeproof: Buffer|Uint8Array|null, pegin_witness: Ref_wally_tx_witness_stack, flags: number): void;

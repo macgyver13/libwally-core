@@ -176,6 +176,28 @@ class AddressTests(unittest.TestCase):
             self.assertEqual(ret, WALLY_OK)
             self.assertEqual(utf8(new_addr), utf8(addr))
 
+    def test_sp_address(self):
+        """Check BIP-352 silent payment addresses"""
+        # The first recipient from the BIP-352 reference vectors
+        info, info_len = make_cbuffer('0220bcfac5b99e04ad1a06ddfb016ee13582609d60b6291e98d01a9bc9a16c96d4'
+                                      '025cc9856d6f8375350e123978daac200c260cb5b5ae83106cab90484dcd8fcf36')
+        mainnet = ('sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3'
+                   'e0rd2cgqvycxttddwsvgxe2usfpxumr70xc9pkqwv')
+        testnet = ('tsp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3'
+                   'e0rd2cgqvycxttddwsvgxe2usfpxumr70xc3wk4yh')
+
+        for family, expected in [('sp', mainnet), ('tsp', testnet)]:
+            ret, addr = wally_sp_address_from_bytes(info, info_len, utf8(family), 0)
+            self.assertEqual((ret, addr), (WALLY_OK, expected))
+
+        for args in [(None, info_len, utf8('sp'), 0),      # Missing payload
+                     (info, info_len - 1, utf8('sp'), 0),  # Not a scan/spend pair
+                     (info, info_len, utf8('bc'), 0),      # Not a silent payment family
+                     (info, info_len, utf8('SP'), 0),      # Upper case family
+                     (info, info_len, None, 0),            # Missing family
+                     (info, info_len, utf8('sp'), 1)]:     # Invalid flags
+            self.assertEqual(wally_sp_address_from_bytes(*args), (WALLY_EINVAL, None))
+
 
 if __name__ == '__main__':
     unittest.main()
