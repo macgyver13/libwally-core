@@ -1849,6 +1849,12 @@ inline int psbt_input_set_signatures(const INPUT& input, const struct wally_map*
     return detail::check_ret(__FUNCTION__, ret);
 }
 
+template <class INPUT, class SCAN_KEY, class SHARE>
+inline int psbt_input_set_sp_ecdh_share(const INPUT& input, const SCAN_KEY& scan_key, const SHARE& share) {
+    int ret = ::wally_psbt_input_set_sp_ecdh_share(detail::get_p(input), scan_key.data(), scan_key.size(), share.data(), share.size());
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
 template <class INPUT, class PUB_KEY>
 inline int psbt_input_set_taproot_internal_key(const INPUT& input, const PUB_KEY& pub_key) {
     int ret = ::wally_psbt_input_set_taproot_internal_key(detail::get_p(input), pub_key.data(), pub_key.size());
