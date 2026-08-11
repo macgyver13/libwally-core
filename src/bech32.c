@@ -24,6 +24,7 @@
 #include <include/wally_address.h>
 #include <include/wally_script.h>
 #include <include/wally_crypto.h>
+#include "bech32_int.h"
 #include "script.h"
 
 #define CHECKSUM_BECH32 0x1
@@ -164,6 +165,43 @@ static int convert_bits(uint8_t *out, size_t *outlen, int outbits, const uint8_t
         return 0;
     }
     return 1;
+}
+
+int bech32m_sp_key_to_bytes(const char *str, size_t str_len,
+                            const char *hrp, size_t hrp_len,
+                            unsigned char *bytes_out, size_t len) {
+    uint8_t data[BECH32M_SP_KEY_MAX_LEN];
+    char hrp_actual[BECH32M_SP_KEY_MAX_LEN];
+    size_t data_len, written = 0;
+    bool is_bech32m = false;
+    int ret = WALLY_EINVAL;
+
+    if (!str || !hrp || !bytes_out ||
+        (len != BECH32M_SP_SCAN_KEY_LEN && len != BECH32M_SP_SPEND_KEY_LEN))
+        return WALLY_EINVAL;
+
+    if (!bech32_decode(hrp_actual, data, &data_len, str, str_len,
+                       BECH32M_SP_KEY_MAX_LEN, &is_bech32m) ||
+        !is_bech32m || !data_len)
+        goto fail;
+
+    if (strlen(hrp_actual) != hrp_len || memcmp(hrp_actual, hrp, hrp_len))
+        goto fail; /* Wrong human-readable part */
+
+    if (data[0] != 0)
+        goto fail; /* Only silent payments v0 is supported */
+
+    /* Any bits left over from the 5 to 8 bit conversion must be zero padding */
+    if (!convert_bits(bytes_out, &written, 8, data + 1, data_len - 1, 5, 0) ||
+        written != len)
+        goto fail;
+
+    ret = WALLY_OK;
+fail:
+    wally_clear_2(data, sizeof(data), hrp_actual, sizeof(hrp_actual));
+    if (ret != WALLY_OK)
+        wally_clear(bytes_out, len);
+    return ret;
 }
 
 static int segwit_addr_encode(char *output, const char *hrp, size_t hrp_len, uint8_t witver, const uint8_t *witprog, size_t witprog_len) {
