@@ -537,6 +537,7 @@ for f in (
     ('wally_psbt_get_length', c_int, [POINTER(wally_psbt), c_uint32, c_size_t_p]),
     ('wally_psbt_get_locktime', c_int, [POINTER(wally_psbt), c_size_t_p]),
     ('wally_psbt_get_sp_smallest_outpoint', c_int, [POINTER(wally_psbt), c_void_p, c_size_t]),
+    ('wally_psbt_get_sp_status', c_int, [POINTER(wally_psbt), c_uint32, c_size_t_p]),
     ('wally_psbt_get_tx_version', c_int, [POINTER(wally_psbt), c_size_t_p]),
     ('wally_psbt_has_global_genesis_blockhash', c_int, [POINTER(wally_psbt), c_size_t_p]),
     ('wally_psbt_init_alloc', c_int, [c_uint32, c_size_t, c_size_t, c_size_t, c_uint32, POINTER(POINTER(wally_psbt))]),

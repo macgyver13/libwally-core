@@ -50,6 +50,54 @@ static int sp_recipient_cmp(const void *lhs_ptr, const void *rhs_ptr)
     return ret;
 }
 
+/* Collect a PSBT's silent payment recipients into a newly allocated array, in
+ * BIP-375 order. Returns NULL and sets *num_recipients to 0 if there are none,
+ * or on allocation failure, which the caller distinguishes via *ret.
+ */
+static struct sp_recipient *sp_collect_recipients(const struct wally_psbt *psbt,
+                                                  size_t *num_recipients, int *ret)
+{
+    struct sp_recipient *recipients;
+    size_t i, num = 0;
+
+    *num_recipients = 0;
+    *ret = WALLY_OK;
+
+    for (i = 0; i < psbt->num_outputs; ++i) {
+        size_t info_len = 0;
+        if (wally_psbt_get_output_sp_v0_info_len(psbt, i, &info_len) == WALLY_OK && info_len)
+            ++num;
+    }
+    if (!num)
+        return NULL; /* No silent payment outputs */
+
+    if (!(recipients = wally_calloc(num * sizeof(*recipients)))) {
+        *ret = WALLY_ENOMEM;
+        return NULL;
+    }
+
+    num = 0;
+    for (i = 0; i < psbt->num_outputs; ++i) {
+        unsigned char info[WALLY_SP_V0_INFO_LEN];
+        size_t info_len = 0;
+        if (wally_psbt_get_output_sp_v0_info(psbt, i, info, sizeof(info), &info_len) != WALLY_OK ||
+            !info_len)
+            continue;
+        if (info_len != sizeof(info)) {
+            wally_free(recipients);
+            *ret = WALLY_EINVAL;
+            return NULL;
+        }
+        memcpy(recipients[num].scan_pubkey, info, EC_PUBLIC_KEY_LEN);
+        memcpy(recipients[num].spend_pubkey, info + EC_PUBLIC_KEY_LEN, EC_PUBLIC_KEY_LEN);
+        recipients[num].output_index = i;
+        ++num;
+    }
+    qsort(recipients, num, sizeof(*recipients), sp_recipient_cmp);
+    *num_recipients = num;
+    return recipients;
+}
+
 /* Return the witness version of a witness program, or -1 if not one.
  * NOTE: wally_scriptpubkey_get_type() cannot serve here: it reports witness
  * v2+ programs as WALLY_SCRIPT_TYPE_UNKNOWN, which would make them merely
@@ -232,6 +280,122 @@ cleanup:
     return ret;
 }
 
+/* Read the public key an eligible input is spent with. For taproot that is the
+ * internal key, which the PSBT carries x-only; otherwise it is the input's sole
+ * BIP32 keypath key. Returns false if the PSBT does not name a usable key,
+ * which leaves any share on that input unverifiable.
+ */
+static bool sp_input_pub_key(const secp256k1_context *ctx,
+                             const struct wally_psbt *psbt, size_t index,
+                             bool is_taproot, secp256k1_pubkey *pubkey_out)
+{
+    const struct wally_map *keypaths = &psbt->inputs[index].keypaths;
+
+    if (is_taproot) {
+        unsigned char compressed[EC_PUBLIC_KEY_LEN];
+        size_t written = 0;
+        if (wally_psbt_get_input_taproot_internal_key(psbt, index, compressed + 1,
+                                                      EC_XONLY_PUBLIC_KEY_LEN,
+                                                      &written) != WALLY_OK ||
+            written != EC_XONLY_PUBLIC_KEY_LEN)
+            return false;
+        /* An x-only key denotes the even-Y point, so it is already the
+         * parity-normalized key that sp_sum_priv_keys() sums to.
+         */
+        compressed[0] = 0x02;
+        return !!secp256k1_ec_pubkey_parse(ctx, pubkey_out, compressed,
+                                           sizeof(compressed));
+    }
+
+    if (keypaths->num_items != 1 ||
+        keypaths->items[0].key_len != EC_PUBLIC_KEY_LEN)
+        return false;
+    return !!secp256k1_ec_pubkey_parse(ctx, pubkey_out, keypaths->items[0].key,
+                                       EC_PUBLIC_KEY_LEN);
+}
+
+/* Read an input's public key once, remembering that we have done so */
+static bool sp_load_pub_key(const secp256k1_context *ctx,
+                            const struct wally_psbt *psbt, size_t index,
+                            bool is_taproot, secp256k1_pubkey *pubkey_out,
+                            bool *loaded)
+{
+    if (!*loaded)
+        *loaded = sp_input_pub_key(ctx, psbt, index, is_taproot, pubkey_out);
+    return *loaded;
+}
+
+/* Sum the eligible inputs' public keys into BIP-352's 'A_sum', the public
+ * counterpart of sp_sum_priv_keys(). Taproot keys are read x-only and so are
+ * already parity-normalized, which is what makes this agree with the sender's
+ * aggregate without any private key. Computed once, on the first global share
+ * that needs it.
+ */
+static bool sp_load_sum_pub_key(const secp256k1_context *ctx,
+                                const struct wally_psbt *psbt,
+                                const size_t *eligible, const bool *is_taproot,
+                                size_t num_keys, secp256k1_pubkey *pubkeys,
+                                bool *loaded, secp256k1_pubkey *sum_out,
+                                bool *sum_loaded)
+{
+    const secp256k1_pubkey **ptrs;
+    size_t i;
+    bool ok;
+
+    if (*sum_loaded)
+        return true;
+    for (i = 0; i < num_keys; ++i) {
+        /* Every eligible input contributes to a global share, so unlike a
+         * per-input share this needs all of their keys.
+         */
+        if (!sp_load_pub_key(ctx, psbt, eligible[i], is_taproot[eligible[i]],
+                             &pubkeys[i], &loaded[i]))
+            return false;
+    }
+    if (!(ptrs = wally_calloc(num_keys * sizeof(*ptrs))))
+        return false;
+    for (i = 0; i < num_keys; ++i)
+        ptrs[i] = &pubkeys[i];
+    ok = !!secp256k1_ec_pubkey_combine(ctx, sum_out, ptrs, num_keys);
+    wally_free(ptrs);
+    *sum_loaded = ok;
+    return ok;
+}
+
+/* Look up a BIP-375 share and its proof for a scan key. Returns false if the
+ * pair is malformed, which is invalid whether or not it was expected here.
+ */
+static bool sp_find_share(const struct wally_map *shares,
+                          const struct wally_map *proofs,
+                          const unsigned char *scan_pubkey_bytes,
+                          const struct wally_map_item **share_out,
+                          const struct wally_map_item **proof_out)
+{
+    *share_out = wally_map_get(shares, scan_pubkey_bytes, EC_PUBLIC_KEY_LEN);
+    *proof_out = wally_map_get(proofs, scan_pubkey_bytes, EC_PUBLIC_KEY_LEN);
+    if (!*share_out && !*proof_out)
+        return true; /* Nothing here; the caller decides whether that is ok */
+    /* A share without its proof, or vice versa, is invalid on its own */
+    return *share_out && *proof_out &&
+           (*share_out)->value_len == EC_PUBLIC_KEY_LEN &&
+           (*proof_out)->value_len == SP_DLEQ_PROOF_LEN;
+}
+
+/* Verify one BIP-375 share and its proof against the key(s) the share covers */
+static bool sp_verify_share(const secp256k1_context *ctx,
+                            const struct wally_map_item *share_item,
+                            const struct wally_map_item *proof_item,
+                            const secp256k1_pubkey *scan_pubkey,
+                            const secp256k1_pubkey *covered_pubkey)
+{
+    secp256k1_pubkey share_pubkey;
+
+    return !!secp256k1_ec_pubkey_parse(ctx, &share_pubkey, share_item->value,
+                                       share_item->value_len) &&
+           !!secp256k1_dleq_verify(ctx, proof_item->value, covered_pubkey,
+                                   scan_pubkey, &share_pubkey, NULL);
+}
+
 /* Derive the aux randomness for the i'th DLEQ proof from the caller's entropy */
 static int sp_proof_entropy(const unsigned char *entropy, size_t index,
                             unsigned char *bytes_out)
@@ -318,34 +482,13 @@ int wally_psbt_sp_resolve(struct wally_psbt *psbt,
         return WALLY_EINVAL; /* BIP-375 is PSBTv2 and bitcoin only */
 
     /* Collect the recipients, in BIP-375 order */
-    for (i = 0; i < psbt->num_outputs; ++i) {
-        size_t info_len = 0;
-        if (wally_psbt_get_output_sp_v0_info_len(psbt, i, &info_len) == WALLY_OK && info_len)
-            ++num_recipients;
-    }
-    if (!num_recipients)
-        return WALLY_EINVAL; /* Nothing to resolve */
+    recipients = sp_collect_recipients(psbt, &num_recipients, &ret);
+    if (!recipients)
+        return ret == WALLY_OK ? WALLY_EINVAL : ret; /* Nothing to resolve */
 
-    is_taproot = wally_calloc(psbt->num_inputs * sizeof(bool));
-    recipients = wally_calloc(num_recipients * sizeof(*recipients));
-    if (!is_taproot || !recipients)
+    ret = WALLY_EINVAL;
+    if (!(is_taproot = wally_calloc(psbt->num_inputs * sizeof(bool))))
         goto cleanup;
-
-    num_recipients = 0;
-    for (i = 0; i < psbt->num_outputs; ++i) {
-        unsigned char info[WALLY_SP_V0_INFO_LEN];
-        size_t info_len = 0;
-        if (wally_psbt_get_output_sp_v0_info(psbt, i, info, sizeof(info), &info_len) != WALLY_OK ||
-            !info_len)
-            continue;
-        if (info_len != sizeof(info))
-            goto cleanup;
-        memcpy(recipients[num_recipients].scan_pubkey, info, EC_PUBLIC_KEY_LEN);
-        memcpy(recipients[num_recipients].spend_pubkey, info + EC_PUBLIC_KEY_LEN, EC_PUBLIC_KEY_LEN);
-        recipients[num_recipients].output_index = i;
-        ++num_recipients;
-    }
-    qsort(recipients, num_recipients, sizeof(*recipients), sp_recipient_cmp);
 
     /* One key per eligible input, in input order */
     for (i = 0; i < psbt->num_inputs; ++i) {
@@ -456,6 +599,134 @@ cleanup:
     wally_free(recipient_objs);
     wally_free(recipients);
     wally_free(is_taproot);
+    return ret;
+}
+
+int wally_psbt_get_sp_status(const struct wally_psbt *psbt, uint32_t flags,
+                             size_t *written)
+{
+    const secp256k1_context *ctx = wally_get_secp_context();
+    struct sp_recipient *recipients = NULL;
+    secp256k1_pubkey *input_pubkeys = NULL;
+    size_t *eligible = NULL;
+    bool *is_taproot = NULL, *loaded = NULL;
+    secp256k1_pubkey sum_pubkey;
+    size_t num_recipients = 0, num_keys = 0;
+    size_t i, j, is_elements = 0;
+    bool all_resolved = true, all_covered = true, sum_loaded = false;
+    int ret;
+
+    if (written)
+        *written = WALLY_SP_INVALID;
+    if (!psbt || !psbt->num_inputs || !written || flags)
+        return WALLY_EINVAL;
+
+    if (psbt->version != WALLY_PSBT_VERSION_2 ||
+        wally_psbt_is_elements(psbt, &is_elements) != WALLY_OK || is_elements)
+        return WALLY_EINVAL; /* BIP-375 is PSBTv2 and bitcoin only */
+
+    recipients = sp_collect_recipients(psbt, &num_recipients, &ret);
+    if (!recipients)
+        return ret == WALLY_OK ? WALLY_EINVAL : ret; /* Nothing to verify */
+
+    ret = WALLY_ENOMEM;
+    input_pubkeys = wally_calloc(psbt->num_inputs * sizeof(*input_pubkeys));
+    eligible = wally_calloc(psbt->num_inputs * sizeof(*eligible));
+    is_taproot = wally_calloc(psbt->num_inputs * sizeof(*is_taproot));
+    loaded = wally_calloc(psbt->num_inputs * sizeof(*loaded));
+    if (!input_pubkeys || !eligible || !is_taproot || !loaded)
+        goto cleanup;
+
+    /* Collect the eligible inputs. Their public keys are read only when a
+     * share turns up that needs one, since a PSBT carrying no shares at all
+     * is simply unresolved, not unverifiable.
+     */
+    for (i = 0; i < psbt->num_inputs; ++i) {
+        bool is_eligible = false;
+        ret = sp_classify_input(psbt, i, &is_eligible, &is_taproot[i]);
+        if (ret != WALLY_OK)
+            goto cleanup; /* Unclassifiable: WALLY_ERROR, as sp_resolve gives */
+        if (is_eligible)
+            eligible[num_keys++] = i;
+    }
+
+    /* BIP-352 cannot derive an output without an eligible input */
+    if (!num_keys)
+        goto invalid;
+
+    for (i = 0; i < num_recipients; ++i) {
+        const struct wally_map_item *share_item, *proof_item;
+        secp256k1_pubkey scan_pubkey;
+        bool found_global;
+        size_t script_len = 0;
+
+        if (wally_psbt_get_output_script_len(psbt, recipients[i].output_index,
+                                             &script_len) != WALLY_OK)
+            goto invalid;
+        if (script_len != WALLY_SCRIPTPUBKEY_P2TR_LEN)
+            all_resolved = false;
+
+        /* Duplicate scan keys are adjacent after the BIP-375 sort, and one
+         * share covers them all, so only check each distinct key once.
+         */
+        if (i && !memcmp(recipients[i].scan_pubkey, recipients[i - 1].scan_pubkey,
+                         EC_PUBLIC_KEY_LEN))
+            continue;
+
+        if (!secp256k1_ec_pubkey_parse(ctx, &scan_pubkey, recipients[i].scan_pubkey,
+                                       EC_PUBLIC_KEY_LEN))
+            goto invalid;
+
+        /* A global share covers the sum of every eligible input */
+        if (!sp_find_share(&psbt->global_sp_ecdh_shares, &psbt->global_sp_dleq_proofs,
+                           recipients[i].scan_pubkey, &share_item, &proof_item))
+            goto invalid;
+        found_global = share_item != NULL;
+        if (found_global) {
+            if (!sp_load_sum_pub_key(ctx, psbt, eligible, is_taproot, num_keys,
+                                     input_pubkeys, loaded, &sum_pubkey, &sum_loaded) ||
+                !sp_verify_share(ctx, share_item, proof_item, &scan_pubkey, &sum_pubkey))
+                goto invalid;
+        }
+
+        /* Otherwise every eligible input must carry its own share and proof */
+        for (j = 0; j < num_keys; ++j) {
+            const struct wally_psbt_input *input = &psbt->inputs[eligible[j]];
+            if (!sp_find_share(&input->sp_ecdh_shares, &input->sp_dleq_proofs,
+                               recipients[i].scan_pubkey, &share_item, &proof_item))
+                goto invalid;
+            if (!share_item) {
+                if (!found_global)
+                    all_covered = false; /* This input contributes nothing here */
+                continue;
+            }
+            if (!sp_load_pub_key(ctx, psbt, eligible[j], is_taproot[eligible[j]],
+                                 &input_pubkeys[j], &loaded[j]) ||
+                !sp_verify_share(ctx, share_item, proof_item, &scan_pubkey,
+                                 &input_pubkeys[j]))
+                goto invalid;
+        }
+    }
+
+    /* Incomplete coverage contradicts a resolved output, but is simply work
+     * still to do while the outputs are unresolved.
+     */
+    if (all_covered)
+        *written = all_resolved ? WALLY_SP_COMPLETE : WALLY_SP_INCOMPLETE;
+    else if (!all_resolved)
+        *written = WALLY_SP_INCOMPLETE;
+    ret = WALLY_OK;
+    goto cleanup;
+
+invalid:
+    ret = WALLY_OK; /* A verdict of invalid, not a failure to reach one */
+
+cleanup:
+    wally_free(loaded);
+    wally_free(is_taproot);
+    wally_free(eligible);
+    wally_free(input_pubkeys);
+    wally_free(recipients);
     return ret;
 }
 
