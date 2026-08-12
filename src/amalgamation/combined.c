@@ -79,6 +79,7 @@
 #include "src/miniscript_satisfy.c"
 #include "src/mnemonic.c"
 #include "src/musig.c"
+#include "src/silentpayments.c"
 #include "src/pbkdf2.c"
 #include "src/pullpush.c"
 #include "src/psbt.c"

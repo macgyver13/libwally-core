@@ -79,6 +79,7 @@ docs/source/musig.rst
 docs/source/psbt.rst
 docs/source/psbt_members.rst
 docs/source/script.rst
+docs/source/silentpayments.rst
 docs/source/symmetric.rst
 docs/source/transaction.rst
 docs/source/transaction_members.rst
