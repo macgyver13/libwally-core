@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import unittest
+from collections import Counter
 from util import *
 
 FLAG_GRIND_R = 0x4
@@ -10,6 +11,16 @@ INIT_PSET = 1
 BIP32_VER_MAIN_PRIVATE = 0x0488ADE4
 BIP32_FLAG_KEY_PUBLIC = 0x1
 BIP32_FP_LEN = 4
+WALLY_SCRIPTPUBKEY_P2TR_LEN = 34
+
+# The status of a PSBT's BIP375 shares and proofs
+WALLY_SP_INVALID, WALLY_SP_INCOMPLETE, WALLY_SP_COMPLETE = 0, 1, 2
+
+# What each BIP375 vector's supplementary.task says its contract is
+TASK_FAIL_DESERIALIZE = 'fail_deserialize'
+TASK_FAIL_SIGN = 'fail_sign'
+TASK_FINALIZE = 'finalize'
+TASK_SIGN = 'sign'
 
 with open(root_dir + 'src/data/psbt.json', 'r') as f:
     JSON = json.load(f)
@@ -54,12 +65,17 @@ with open(root_dir + 'src/data/bip375_test_vectors.json', 'r') as f:
     def test_bip375_vectors(self):
         """Test the BIP375 test vectors
 
-        The vectors validate at four levels, named by the description prefix:
-        psbt structure, ecdh coverage, input eligibility and output scripts.
-        Only the first is wally's concern - the rest are Signer role semantics
-        that a caller implements on top. So structural vectors must be
-        rejected here, while the rest must parse and round trip, being
-        structurally valid by construction.
+        Each vector's supplementary.task names the contract it encodes, which
+        is what we dispatch on: the descriptions state the same thing in prose,
+        but only as a prefix convention that rewording would silently break.
+
+        - fail_deserialize: the parser must reject it.
+        - fail_sign: it parses, but a signer must refuse it. Three different
+          checks are needed to catch all of them, see bip375_refusal().
+        - finalize/sign: it is valid. The silent payment layer is complete or
+          still in progress, which is not the same axis as the task name:
+          'sign' means signatures are outstanding, and two such vectors have
+          their outputs already resolved.
 
         Note most vectors serialize PSBT_GLOBAL_TX_MODIFIABLE explicitly as
         zero, while wally omits the field entirely when no flags are set (the
@@ -67,27 +83,127 @@ with open(root_dir + 'src/data/bip375_test_vectors.json', 'r') as f:
         trip byte for byte, so we require serialization to be a fixed point,
         and only require byte equality when the source omits the field too.
         """
-        num_rejected, num_round_tripped, num_skipped = 0, 0, 0
+        refusals, num_valid = {}, 0
 
         for case in BIP375_JSON['invalid']:
-            check = case['description'].split(':')[0]
-            self.assertIn(check, ('psbt structure', 'ecdh coverage',
-                                  'input eligibility', 'output scripts'),
-                          case['description'])
-            if check == 'psbt structure':
+            task = case['supplementary']['task']
+            if task == TASK_FAIL_DESERIALIZE:
                 wally_psbt_free(self.parse_base64(case['psbt'], WALLY_EINVAL))
-                num_rejected += 1
-            else:
-                # Structurally valid: must parse, and fail only at signing time
-                wally_psbt_free(self.round_trip_bip375(case, case['psbt']))
-                num_round_tripped += 1
+                refusals[case['description']] = 'deserialize'
+                continue
+
+            self.assertEqual(task, TASK_FAIL_SIGN, case['description'])
+            psbt = self.round_trip_bip375(case, case['psbt'])
+            refusal = self.bip375_refusal(psbt, case)
+            wally_psbt_free(psbt)
+            self.assertIsNotNone(refusal, case['description'])
+            refusals[case['description']] = refusal
 
         for case in BIP375_JSON['valid']:
-            wally_psbt_free(self.round_trip_bip375(case, case['psbt']))
-            num_round_tripped += 1
+            task = case['supplementary']['task']
+            self.assertIn(task, (TASK_FINALIZE, TASK_SIGN), case['description'])
+            psbt = self.round_trip_bip375(case, case['psbt'])
 
-        self.assertEqual(num_rejected, 6)
-        self.assertEqual(num_round_tripped, 35)
+            ret, status = wally_psbt_get_sp_status(psbt, 0)
+            self.assertEqual(ret, WALLY_OK, case['description'])
+            # Coverage must be complete exactly when the outputs are resolved
+            expected = (WALLY_SP_COMPLETE if self.sp_outputs_resolved(psbt)
+                        else WALLY_SP_INCOMPLETE)
+            self.assertEqual(status, expected, case['description'])
+            wally_psbt_free(psbt)
+            num_valid += 1
+
+        # Assert how each vector is caught, so that a vectors refresh which
+        # changes the mix fails here rather than silently reclassifying
+        counts = Counter(refusals.values())
+        self.assertEqual(counts['deserialize'], 6)
+        self.assertEqual(counts['status'], 14)
+        self.assertEqual(counts['eligibility'], 1)
+        # Nothing needs the private keys: the status check derives the outputs
+        # from the shares, so the three 'output scripts' vectors are caught
+        # without them. A non-zero count here means that check has regressed.
+        self.assertEqual(counts['derivation'], 0)
+        self.assertEqual(counts['signer policy'], 1)
+        self.assertEqual(num_valid, 19)
+
+    def bip375_refusal(self, psbt, case):
+        """Return the name of the check that refuses a fail_sign vector.
+
+        The checks are tried in increasing order of what they require, since
+        each needs strictly more than the last: nothing, then the inputs'
+        private keys, then a signing policy wally does not impose. Only the
+        first and last catch anything today - step 2 is kept as a regression
+        guard, see the counts asserted by the caller.
+        """
+        # 1. The shares and proofs alone, which need no keys at all
+        ret, status = wally_psbt_get_sp_status(psbt, 0)
+        if ret == WALLY_ERROR:
+            return 'eligibility'  # An input wally cannot classify
+        self.assertEqual(ret, WALLY_OK, case['description'])
+        if status == WALLY_SP_INVALID:
+            return 'status'
+        self.assertEqual(status, WALLY_SP_COMPLETE, case['description'])
+
+        # 2. Re-derive the outputs, which needs every eligible input's key.
+        # A status of COMPLETE already covers this without any key, so nothing
+        # should reach here; it stays to catch a weakening of that check.
+        if self.bip375_derives_differently(psbt, case):
+            return 'derivation'
+
+        # 3. Nothing wally checks refuses this one. BIP375 requires signers to
+        # use SIGHASH_ALL, which is a policy wally leaves to its caller.
+        self.assertIn('SIGHASH', case['description'], case['description'])
+        return 'signer policy'
+
+    def sp_outputs_resolved(self, psbt):
+        """Return whether every silent payment output has a scriptPubKey"""
+        for i in range(psbt.contents.num_outputs):
+            ret, info_len = wally_psbt_get_output_sp_v0_info_len(psbt, i)
+            self.assertEqual(ret, WALLY_OK)
+            if not info_len:
+                continue
+            ret, script_len = wally_psbt_get_output_script_len(psbt, i)
+            self.assertEqual(ret, WALLY_OK)
+            if script_len != WALLY_SCRIPTPUBKEY_P2TR_LEN:
+                return False
+        return True
+
+    def sp_output_scripts(self, psbt):
+        """Return the scriptPubKey of each silent payment output"""
+        scripts = []
+        for i in range(psbt.contents.num_outputs):
+            ret, info_len = wally_psbt_get_output_sp_v0_info_len(psbt, i)
+            self.assertEqual(ret, WALLY_OK)
+            if not info_len:
+                continue
+            buf, buf_len = make_cbuffer('00' * WALLY_SCRIPTPUBKEY_P2TR_LEN)
+            ret, written = wally_psbt_get_output_script(psbt, i, buf, buf_len)
+            self.assertEqual(ret, WALLY_OK)
+            scripts.append(h(buf[:written]).decode('utf-8'))
+        return scripts
+
+    def bip375_derives_differently(self, psbt, case):
+        """Return whether re-deriving a vector's outputs changes them.
+
+        The vectors carry their inputs' private keys as supplementary data,
+        which is not something to validate, but is what lets us reconstruct
+        the sender and check the outputs it should have produced.
+        """
+        keys = ''
+        by_index = {i['input_index']: i for i in case['supplementary']['inputs']}
+        for i in range(psbt.contents.num_inputs):
+            ret, eligible = wally_psbt_get_input_sp_eligible(psbt, i)
+            self.assertEqual(ret, WALLY_OK, case['description'])
+            if eligible:
+                keys += by_index[i]['private_key']
+
+        before = self.sp_output_scripts(psbt)
+        entropy, entropy_len = make_cbuffer('00' * 32)
+        priv_keys, priv_keys_len = make_cbuffer(keys) if keys else (None, 0)
+        if wally_psbt_sp_resolve(psbt, priv_keys, priv_keys_len,
+                                 entropy, entropy_len, 0) != WALLY_OK:
+            return True  # These inputs cannot derive these outputs at all
+        return self.sp_output_scripts(psbt) != before
 
     def round_trip_bip375(self, case, src_base64):
         """Parse a BIP375 vector and check serializing it is a fixed point.
