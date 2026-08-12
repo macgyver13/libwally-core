@@ -436,6 +436,7 @@ export const psbt_get_output_value_rangeproof_len = wrap('wally_psbt_get_output_
 export const psbt_get_output_witness_script_len = wrap('wally_psbt_get_output_witness_script_len', [T.OpaqueRef, T.Int32, T.DestPtr(T.Int32)]);
 export const psbt_get_pset_modifiable_flags = wrap('wally_psbt_get_pset_modifiable_flags', [T.OpaqueRef, T.DestPtr(T.Int32)]);
 export const psbt_get_sp_smallest_outpoint = wrap('wally_psbt_get_sp_smallest_outpoint', [T.OpaqueRef, T.DestPtrSized(T.Bytes, C.WALLY_SP_OUTPOINT_LEN)]);
+export const psbt_get_sp_status = wrap('wally_psbt_get_sp_status', [T.OpaqueRef, T.Int32, T.DestPtr(T.Int32)]);
 export const psbt_get_tx_modifiable_flags = wrap('wally_psbt_get_tx_modifiable_flags', [T.OpaqueRef, T.DestPtr(T.Int32)]);
 export const psbt_get_tx_version = wrap('wally_psbt_get_tx_version', [T.OpaqueRef, T.DestPtr(T.Int32)]);
 export const psbt_get_version = wrap('wally_psbt_get_version', [T.OpaqueRef, T.DestPtr(T.Int32)]);

@@ -1455,6 +1455,12 @@ inline int psbt_get_sp_smallest_outpoint(const PSBT& psbt, BYTES_OUT& bytes_out)
 }
 
 template <class PSBT>
+inline int psbt_get_sp_status(const PSBT& psbt, uint32_t flags, size_t* written) {
+    int ret = ::wally_psbt_get_sp_status(detail::get_p(psbt), flags, written);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT>
 inline int psbt_get_tx_version(const PSBT& psbt, size_t* written) {
     int ret = ::wally_psbt_get_tx_version(detail::get_p(psbt), written);
     return detail::check_ret(__FUNCTION__, ret);
