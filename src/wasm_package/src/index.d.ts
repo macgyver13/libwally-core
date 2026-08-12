@@ -438,6 +438,7 @@ export function psbt_get_output_value_rangeproof_len(psbt: Ref_wally_psbt, index
 export function psbt_get_output_witness_script_len(psbt: Ref_wally_psbt, index: number): number;
 export function psbt_get_pset_modifiable_flags(psbt: Ref_wally_psbt): number;
 export function psbt_get_sp_smallest_outpoint(psbt: Ref_wally_psbt): Buffer;
+export function psbt_get_sp_status(psbt: Ref_wally_psbt, flags: number): number;
 export function psbt_get_tx_modifiable_flags(psbt: Ref_wally_psbt): number;
 export function psbt_get_tx_version(psbt: Ref_wally_psbt): number;
 export function psbt_get_version(psbt: Ref_wally_psbt): number;

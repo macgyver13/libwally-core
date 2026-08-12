@@ -3,6 +3,19 @@
 ## Version 1.5.7
 
 ### Added
+- silentpayments: Add BIP-352 sending and BIP-375 PSBT support:
+  - New `wally_silentpayments.h` API: `wally_psbt_get_input_sp_eligible`,
+    `wally_psbt_get_sp_smallest_outpoint`, `wally_psbt_sp_resolve` to derive
+    the outputs and attach one global ECDH share and DLEQ proof per recipient
+    scan key, and `wally_psbt_get_sp_status` to verify shares, proofs and
+    resolved output scripts without any private keys
+  - BIP-375 PSBT fields: `PSBT_OUT_SP_V0_INFO`, and the global/per-input ECDH
+    share and DLEQ proof maps, with their accessors
+  - BIP-352 addresses: `wally_sp_address_from_bytes`
+  - BIP-392 `sp()` output descriptors, and the `spscan` key expression
+    (`wally_descriptor_sp_key_from_bytes`, `wally_descriptor_sp_key_to_bytes`)
+  - Requires secp256k1-zkp with the silentpayments and dleq modules
+    (guarded by `BUILD_STANDARD_SECP`)
 - crypto: Add `wally_ec_public_key_compress`. `wally_ec_public_key_decompress`
   now also accepts an already-uncompressed key, returning it unchanged.
 - descriptor: Add `wally_descriptor_derive_bip32_key` to derive any key in a
