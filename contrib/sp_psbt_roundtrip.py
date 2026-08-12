@@ -30,9 +30,6 @@ from util import *
 
 EC_PRIVATE_KEY_LEN = 32
 EC_PUBLIC_KEY_LEN = 33
-EC_XONLY_PUBLIC_KEY_LEN = 32
-DLEQ_PROOF_LEN = 64
-SP_V0_INFO_LEN = 66             # compressed scan || compressed spend
 WALLY_SP_SCAN_KEY_LEN = 65      # BIP-392 spscan: scan privkey || spend pubkey
 WALLY_SP_OUTPOINT_LEN = 36
 
