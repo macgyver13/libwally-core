@@ -1119,6 +1119,50 @@ class DescriptorTests(unittest.TestCase):
             ret = wally_descriptor_parse(descriptor, None, NETWORK_BTC_MAIN, 0, d)
             self.assertEqual(ret, WALLY_EINVAL, descriptor)
 
+        # Creating the same key expressions from their payloads
+        scan_key, scan_key_len = make_cbuffer(
+            '0f694e068028a717f8af6b9411f9a133dd3565258714cc226594b34db90c1f2c'
+            '025cc9856d6f8375350e123978daac200c260cb5b5ae83106cab90484dcd8fcf36')
+        spend_key, spend_key_len = make_cbuffer(
+            '0f694e068028a717f8af6b9411f9a133dd3565258714cc226594b34db90c1f2c'
+            '9d13a2a4a95d64ba9a4f3c1e2a53d5a7d0f2b1c8e3f4a5b6c7d8e9f0a1b2c3d4')
+
+        for key, key_len, hrp, expected in [
+            (scan_key, scan_key_len, 'spscan', spscan),
+            (scan_key, scan_key_len, 'tspscan', tspscan),
+            (spend_key, spend_key_len, 'spspend', spspend),
+        ]:
+            ret, key_str = wally_descriptor_sp_key_from_bytes(key, key_len, utf8(hrp))
+            self.assertEqual((ret, key_str), (WALLY_OK, expected))
+            # And the result must parse back as an sp() descriptor
+            network = NETWORK_BTC_TEST if hrp[0] == 't' else NETWORK_BTC_MAIN
+            ret = wally_descriptor_parse(f'sp({key_str})', None, network, 0, d)
+            self.assertEqual(ret, WALLY_OK, key_str)
+            wally_descriptor_free(d)
+
+        # And the round trip back to the payload
+        for key_str, expected, expected_len in [(spscan, scan_key, scan_key_len),
+                                                (tspscan, scan_key, scan_key_len),
+                                                (spspend, spend_key, spend_key_len)]:
+            out, out_len = make_cbuffer('00' * 65)
+            ret, written = wally_descriptor_sp_key_to_bytes(utf8(key_str), out, out_len)
+            self.assertEqual((ret, written), (WALLY_OK, expected_len))
+            self.assertEqual(h(out[:written]), h(expected[:expected_len]))
+
+        for args in [(None, None, 65), (utf8(spscan), None, 65),
+                     (utf8(spscan), make_cbuffer('00' * 65)[0], 64),   # Buffer too small
+                     (utf8('spqqq1qqq'), make_cbuffer('00' * 65)[0], 65),  # Unknown type
+                     (utf8('not a key'), make_cbuffer('00' * 65)[0], 65)]:
+            self.assertEqual(wally_descriptor_sp_key_to_bytes(*args), (WALLY_EINVAL, 0))
+
+        for args in [(None, scan_key_len, utf8('spscan')),        # Missing payload
+                     (scan_key, spend_key_len, utf8('spscan')),   # Wrong length for hrp
+                     (spend_key, spend_key_len, utf8('spscan')),  # Wrong length for hrp
+                     (scan_key, scan_key_len, utf8('spqqq')),     # Unknown key type
+                     (scan_key, scan_key_len, utf8('sp')),        # An address, not a key
+                     (scan_key, scan_key_len, None)]:             # Missing hrp
+            self.assertEqual(wally_descriptor_sp_key_from_bytes(*args), (WALLY_EINVAL, None))
+
 
 if __name__ == '__main__':
     unittest.main()
