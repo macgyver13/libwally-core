@@ -95,6 +95,53 @@ WALLY_CORE_API int wally_descriptor_canonicalize(
     uint32_t flags,
     char **output);
 
+#define WALLY_SP_SCAN_KEY_LEN 65 /** BIP-392 ser256(b_scan) || serP(B_spend) */
+#define WALLY_SP_SPEND_KEY_LEN 64 /** BIP-392 ser256(b_scan) || ser256(b_spend) */
+
+/**
+ * Create a BIP-392 silent payment key expression.
+ *
+ * :param bytes: The key payload: ``ser256(b_scan) || serP(B_spend)`` for a
+ *|    scan key expression, or ``ser256(b_scan) || ser256(b_spend)`` for a
+ *|    spend key expression.
+ * :param bytes_len: Length of ``bytes`` in bytes, which must match ``hrp``.
+ * :param hrp: The key expression type: "spscan", "tspscan", "spspend" or
+ *|    "tspspend".
+ * :param output: Destination for the resulting key expression, suitable for
+ *|    use in an ``sp()`` descriptor. The string returned should be freed
+ *|    using `wally_free_string`.
+ *
+ * .. note:: Both key expression types contain the scan *private* key, so the
+ *|    result is sensitive: an spscan key allows a wallet's payments to be
+ *|    found, and an spspend key allows them to be spent.
+ */
+WALLY_CORE_API int wally_descriptor_sp_key_from_bytes(
+    const unsigned char *bytes,
+    size_t bytes_len,
+    const char *hrp,
+    char **output);
+
+/**
+ * Get the keys from a BIP-392 silent payment key expression.
+ *
+ * :param key_expression: The key expression, e.g. "spscan1q...", as returned
+ *|    by `wally_descriptor_get_key` for an ``sp()`` descriptor.
+ * :param bytes_out: Destination for the key payload.
+ * MAX_SIZED_OUTPUT(len, bytes_out, WALLY_SP_SCAN_KEY_LEN)
+ * :param written: Destination for the number of bytes written to ``bytes_out``:
+ *|    `WALLY_SP_SCAN_KEY_LEN` for a scan key expression, or
+ *|    `WALLY_SP_SPEND_KEY_LEN` for a spend key expression.
+ *
+ * .. note:: The result contains the scan private key, and for a spend key
+ *|    expression the spend private key also. See
+ *|    `wally_descriptor_sp_key_from_bytes`.
+ */
+WALLY_CORE_API int wally_descriptor_sp_key_to_bytes(
+    const char *key_expression,
+    unsigned char *bytes_out,
+    size_t len,
+    size_t *written);
+
 /**
  * Create an output descriptor checksum.
  *
