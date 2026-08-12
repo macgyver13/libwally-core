@@ -359,6 +359,7 @@ EXPORTED_FUNCTIONS="['_malloc','_free','_bip32_key_free' \
 ,'_wally_psbt_get_output_witness_script' \
 ,'_wally_psbt_get_output_witness_script_len' \
 ,'_wally_psbt_get_sp_smallest_outpoint' \
+,'_wally_psbt_get_sp_status' \
 ,'_wally_psbt_get_tx_modifiable_flags' \
 ,'_wally_psbt_get_tx_version' \
 ,'_wally_psbt_get_version' \
