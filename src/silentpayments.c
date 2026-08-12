@@ -134,6 +134,20 @@ static int sp_classify_input(const struct wally_psbt *psbt, size_t index,
         *is_taproot = *is_eligible;
         break;
     }
+
+    /* BIP-352 skips inputs spent with an uncompressed public key. Compression
+     * is a property of the key, not of the prevout script, so it can only be
+     * seen where the PSBT names the input's key.
+     */
+    if (*is_eligible && !*is_taproot) {
+        const struct wally_map *keypaths = &psbt->inputs[index].keypaths;
+        size_t i;
+        for (i = 0; i < keypaths->num_items; ++i)
+            if (keypaths->items[i].key_len == EC_PUBLIC_KEY_UNCOMPRESSED_LEN) {
+                *is_eligible = false;
+                break;
+            }
+    }
     return WALLY_OK;
 }
 
@@ -202,9 +216,15 @@ static int sp_sum_priv_keys(const secp256k1_context *ctx,
         }
         if (!i)
             memcpy(sum_out, normalized, EC_PRIVATE_KEY_LEN);
-        else if (!secp256k1_ec_seckey_tweak_add(ctx, sum_out, normalized))
+        else if (wally_ec_scalar_add_to(sum_out, EC_PRIVATE_KEY_LEN,
+                                        normalized, EC_PRIVATE_KEY_LEN) != WALLY_OK)
             goto cleanup;
     }
+    /* Summing as scalars, rather than as private keys, is deliberate: an
+     * intermediate sum of zero is not an error, only a final sum of zero is.
+     */
+    if (!secp256k1_ec_seckey_verify(ctx, sum_out))
+        goto cleanup;
     ret = WALLY_OK;
 
 cleanup:
