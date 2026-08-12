@@ -61,6 +61,39 @@ Silentpayments Functions
    :return: See :ref:`error-codes`
 
 
+.. c:function:: int wally_psbt_get_sp_status(const struct wally_psbt *psbt, uint32_t flags, size_t *written)
+
+   
+   Get the status of a PSBT's BIP-375 ECDH shares and DLEQ proofs.
+   
+   :param psbt: The PSBT to check. Not modified.
+   :param flags: For future use. Must be 0.
+   :param written: `WALLY_SP_INVALID`, `WALLY_SP_INCOMPLETE` or `WALLY_SP_COMPLETE`, as described below.
+   
+   Checks that every share for a recipient of this PSBT is accompanied by a
+   proof, that every such proof verifies against the public key(s) it covers,
+   and that the shares present cover every eligible input and every recipient
+   scan key. Where the outputs are resolved, also checks that each one holds
+   the scriptPubKey that BIP-352 derives from the shares. Requires no private
+   keys, so a signer can check work done by other signers.
+   
+   The verdict depends on whether the silent payment outputs have been resolved:
+   
+   - `WALLY_SP_INVALID`: a share without its proof, a proof that does not verify, a share whose input has no key to verify it against, or - when the outputs are already resolved - incomplete coverage or a scriptPubKey that is not the one BIP-352 derives. Do not sign.
+   - `WALLY_SP_INCOMPLETE`: the outputs are not resolved and coverage is not yet complete. Everything present is valid; more signers must contribute.
+   - `WALLY_SP_COMPLETE`: the outputs are resolved, coverage is complete, every proof verifies and every resolved scriptPubKey is the derived one.
+   
+   .. note:: The derived check uses only public data: the shares are DLEQ-proven against the inputs' public keys, and BIP-352 needs nothing more than the share, the transaction's smallest outpoint and the recipient's spend key to reach the output. A signer holding none of the eligible inputs can therefore still confirm that what it is asked to sign pays the recipient.
+
+   
+   .. note:: Shares and proofs stored under a scan key that no recipient of this PSBT uses are ignored. BIP-375 does not forbid them and they cannot affect the derived outputs.
+
+   
+   .. note:: An input that cannot be classified at all, such as an unknown future witness version, returns `WALLY_ERROR`, as it does from `wally_psbt_get_input_sp_eligible`.
+
+   :return: See :ref:`error-codes`
+
+
  
 Silentpayments Constants
 ------------------------
@@ -68,3 +101,15 @@ Silentpayments Constants
 .. c:macro:: WALLY_SP_OUTPOINT_LEN
  
     The BIP-352 outpoint of an input: its txid followed by a 4 byte LE vout
+
+.. c:macro:: WALLY_SP_INVALID
+ 
+    Shares or proofs are missing, contradictory or invalid: refuse to sign
+
+.. c:macro:: WALLY_SP_INCOMPLETE
+ 
+    The outputs are not resolved yet, and what is present is valid
+
+.. c:macro:: WALLY_SP_COMPLETE
+ 
+    The outputs are resolved, every share is covered and every proof verifies
