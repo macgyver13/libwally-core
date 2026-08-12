@@ -10,6 +10,7 @@ with open(root_dir + 'src/data/bip352_test_vectors.json', 'r') as f:
 # A valid recipient, for the tests that do not need a whole vector case
 RECIPIENT = BIP352_JSON[0]['sending'][0]['given']['recipients'][0]
 
+WALLY_SP_INVALID, WALLY_SP_INCOMPLETE, WALLY_SP_COMPLETE = 0, 1, 2
 ENTROPY = '00' * 32
 NUMS = '50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0'
 CONTROL_BLOCK_TAGS = (0xc0, 0xc1)
@@ -344,7 +345,67 @@ class SilentPaymentsTests(unittest.TestCase):
             ret, written = wally_psbt_get_output_script(psbt, i, actual, actual_len)
             self.assertEqual((ret, written), (WALLY_OK, actual_len))
             self.assertEqual(bytes(actual), expected_script)
+        wally_psbt_free(psbt)
 
+    def test_taproot_output_key(self):
+        """Test that a taproot input contributes its tweaked output key
+
+        BIP-352 uses the taproot output key, which differs from the internal
+        key whenever the output is tweaked - as every BIP-86 output is. The
+        BIP-352 vectors cannot catch a confusion of the two, because their
+        taproot inputs are built with an untweaked key.
+        """
+        priv, priv_len = make_cbuffer('55' * 32)
+        pub, pub_len = make_cbuffer('00' * 33)
+        self.assertEqual(wally_ec_public_key_from_private_key(priv, priv_len,
+                                                              pub, pub_len), WALLY_OK)
+        # The key path spend of a BIP-86 output: no merkle root, so the tweak
+        # is the internal key alone, and internal key != output key
+        tweaked_priv, tweaked_priv_len = make_cbuffer('00' * 32)
+        tweaked_pub, tweaked_pub_len = make_cbuffer('00' * 33)
+        self.assertEqual(wally_ec_private_key_bip341_tweak(
+            priv, priv_len, None, 0, 0, tweaked_priv, tweaked_priv_len), WALLY_OK)
+        self.assertEqual(wally_ec_public_key_bip341_tweak(
+            pub, pub_len, None, 0, 0, tweaked_pub, tweaked_pub_len), WALLY_OK)
+        internal_xonly = h(pub[1:]).decode('utf-8')
+        output_xonly = h(tweaked_pub[1:]).decode('utf-8')
+        self.assertNotEqual(internal_xonly, output_xonly)
+
+        vin = [{'txid': '11' * 32, 'vout': 0,
+                'prevout': {'scriptPubKey': {'hex': '5120' + output_xonly}}}]
+        psbt = self.build_psbt(vin, [RECIPIENT])
+        key, key_len = make_cbuffer(internal_xonly)
+        self.assertEqual(wally_psbt_set_input_taproot_internal_key(psbt, 0, key,
+                                                                   key_len), WALLY_OK)
+        entropy, entropy_len = make_cbuffer(ENTROPY)
+        self.assertEqual(wally_psbt_sp_resolve(psbt, tweaked_priv, tweaked_priv_len,
+                                               entropy, entropy_len, 0), WALLY_OK)
+        # The share is proven against, and the output derived from, the output
+        # key. Using the internal key for either leaves them disagreeing.
+        self.assertEqual(wally_psbt_get_sp_status(psbt, 0),
+                         (WALLY_OK, WALLY_SP_COMPLETE))
+        wally_psbt_free(psbt)
+
+    def test_status_output_scripts(self):
+        """Test that a resolved output must hold the derived scriptPubKey"""
+        case = BIP352_JSON[0]['sending'][0]['given']
+        keys, keys_len = make_cbuffer(''.join(v['private_key'] for v in case['vin']))
+        entropy, entropy_len = make_cbuffer(ENTROPY)
+
+        psbt = self.build_psbt(case['vin'], case['recipients'])
+        self.assertEqual(wally_psbt_sp_resolve(psbt, keys, keys_len,
+                                               entropy, entropy_len, 0), WALLY_OK)
+        self.assertEqual(wally_psbt_get_sp_status(psbt, 0),
+                         (WALLY_OK, WALLY_SP_COMPLETE))
+
+        # Replacing a resolved script with another valid P2TR script must be
+        # caught, even though every share and proof is untouched and valid
+        script = self.output_scripts(psbt, len(case['recipients']))[0]
+        tampered = '5120' + ('%02x' % (int(script[:2], 16) ^ 0xff)) + script[2:]
+        buf, buf_len = make_cbuffer(tampered)
+        self.assertEqual(wally_psbt_set_output_script(psbt, 0, buf, buf_len), WALLY_OK)
+        self.assertEqual(wally_psbt_get_sp_status(psbt, 0),
+                         (WALLY_OK, WALLY_SP_INVALID))
         wally_psbt_free(psbt)
 
     def test_resolve_entropy(self):
