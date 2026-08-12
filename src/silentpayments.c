@@ -1,6 +1,7 @@
 #include "internal.h"
 #include "psbt_io.h"
 
+#include <include/wally_address.h>
 #include <include/wally_crypto.h>
 #include <include/wally_psbt.h>
 #include <include/wally_psbt_members.h>
@@ -8,13 +9,13 @@
 #include <include/wally_silentpayments.h>
 #include <include/wally_transaction.h>
 
+#include <stdlib.h>
+
+#ifndef BUILD_STANDARD_SECP
 #include <secp256k1_dleq.h>
 #include <secp256k1_extrakeys.h>
 #include <secp256k1_silentpayments.h>
 
-#include <stdlib.h>
-
-#define SP_V0_INFO_LEN (EC_PUBLIC_KEY_LEN * 2)
 /* The largest redeem script worth inspecting is a segwit witness program */
 #define SP_MAX_REDEEM_SCRIPT_LEN 42
 
@@ -312,7 +313,7 @@ int wally_psbt_sp_resolve(struct wally_psbt *psbt,
 
     num_recipients = 0;
     for (i = 0; i < psbt->num_outputs; ++i) {
-        unsigned char info[SP_V0_INFO_LEN];
+        unsigned char info[WALLY_SP_V0_INFO_LEN];
         size_t info_len = 0;
         if (wally_psbt_get_output_sp_v0_info(psbt, i, info, sizeof(info), &info_len) != WALLY_OK ||
             !info_len)
@@ -437,3 +438,5 @@ cleanup:
     wally_free(is_taproot);
     return ret;
 }
+
+#endif /* ndef BUILD_STANDARD_SECP */

@@ -16,6 +16,7 @@ ENTROPY = '00' * 32
 NUMS = '50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0'
 
 
+@unittest.skipUnless(wally_psbt_sp_resolve, 'Silent payments module not enabled')
 class SilentPaymentsTests(unittest.TestCase):
 
     def make_psbt(self, scripts, sp_info=VECTOR_INFO, outpoints=VECTOR_OUTPOINTS):

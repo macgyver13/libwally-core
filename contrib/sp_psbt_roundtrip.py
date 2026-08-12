@@ -217,6 +217,10 @@ INPUT_AMOUNT, OUTPUT_AMOUNT = 100000, 90000
 
 
 def main():
+    if not wally_psbt_sp_resolve:
+        print('Silent payments module not enabled in this build')
+        return
+
     # -- Step 1: the recipient publishes a silent payment address -------------
     scan_pubkey = pubkey_from_privkey(RECIPIENT_SCAN_PRIVKEY)
     spend_pubkey = pubkey_from_privkey(RECIPIENT_SPEND_PRIVKEY)
