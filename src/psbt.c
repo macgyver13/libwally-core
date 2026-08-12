@@ -828,6 +828,24 @@ static int psbt_map_input_field_verify(const unsigned char *key, size_t key_len,
     return key ? WALLY_EINVAL : psbt_input_field_verify(key_len, val, val_len);
 }
 
+static int sp_ecdh_share_verify(const unsigned char *key, size_t key_len,
+                                const unsigned char *val, size_t val_len)
+{
+    if (wally_ec_public_key_verify(key, key_len) != WALLY_OK ||
+        val_len != EC_PUBLIC_KEY_LEN)
+        return WALLY_EINVAL;
+    return wally_ec_public_key_verify(val, val_len);
+}
+
+static int sp_dleq_verify(const unsigned char *key, size_t key_len,
+                          const unsigned char *val, size_t val_len)
+{
+    if (wally_ec_public_key_verify(key, key_len) != WALLY_OK ||
+        !val || val_len != SP_DLEQ_PROOF_LEN)
+        return WALLY_EINVAL;
+    return WALLY_OK;
+}
+
 static int psbt_output_field_verify(uint32_t field_type,
                                     const unsigned char *val, size_t val_len)
 {
@@ -841,6 +859,14 @@ static int psbt_output_field_verify(uint32_t field_type,
         return val && val_len == SHA256_LEN ? WALLY_OK : WALLY_EINVAL;
     case PSBT_OUT_TAP_TREE:
         return taproot_tree_value_verify(val, val_len);
+    case PSBT_OUT_SP_V0_INFO:
+        if (!val || val_len != EC_PUBLIC_KEY_LEN * 2 ||
+            wally_ec_public_key_verify(val, EC_PUBLIC_KEY_LEN) != WALLY_OK)
+            return WALLY_EINVAL;
+        return wally_ec_public_key_verify(val + EC_PUBLIC_KEY_LEN,
+                                          EC_PUBLIC_KEY_LEN);
+    case PSBT_OUT_SP_V0_LABEL:
+        return val && val_len == sizeof(uint32_t) ? WALLY_OK : WALLY_EINVAL;
     default:
         break;
     }
@@ -1106,6 +1132,8 @@ static void psbt_input_init(struct wally_psbt_input *input)
     wally_map_init(0, musig2_participant_pubkeys_verify, &input->musig2_pubkeys);
     wally_map_init(0, musig2_pubnonce_verify, &input->musig2_pubnonces);
     wally_map_init(0, musig2_partial_sig_verify, &input->musig2_partial_sigs);
+    wally_map_init(0, sp_ecdh_share_verify, &input->sp_ecdh_shares);
+    wally_map_init(0, sp_dleq_verify, &input->sp_dleq_proofs);
 #ifdef BUILD_ELEMENTS
     wally_map_init(0, pset_map_input_field_verify, &input->pset_fields);
 #endif /* BUILD_ELEMENTS */
@@ -1129,6 +1157,8 @@ static int psbt_input_free(struct wally_psbt_input *input, bool free_parent)
         wally_map_clear(&input->musig2_pubkeys);
         wally_map_clear(&input->musig2_pubnonces);
         wally_map_clear(&input->musig2_partial_sigs);
+        wally_map_clear(&input->sp_ecdh_shares);
+        wally_map_clear(&input->sp_dleq_proofs);
 #ifdef BUILD_ELEMENTS
         wally_tx_free(input->pegin_tx);
         wally_tx_witness_stack_free(input->pegin_witness);
@@ -1153,6 +1183,8 @@ static void psbt_inputs_free(struct wally_psbt_input *inputs, size_t num_inputs)
 MAP_INNER_FIELD(output, redeem_script, PSBT_OUT_REDEEM_SCRIPT, psbt_fields)
 MAP_INNER_FIELD(output, witness_script, PSBT_OUT_WITNESS_SCRIPT, psbt_fields)
 MAP_INNER_FIELD(output, taproot_internal_key, PSBT_OUT_TAP_INTERNAL_KEY, psbt_fields)
+MAP_INNER_FIELD(output, sp_v0_info, PSBT_OUT_SP_V0_INFO, psbt_fields)
+MAP_INNER_FIELD(output, sp_v0_label, PSBT_OUT_SP_V0_LABEL, psbt_fields)
 SET_MAP(wally_psbt_output, keypath,)
 ADD_KEYPATH(wally_psbt_output)
 ADD_TAP_KEYPATH(wally_psbt_output)
@@ -1188,6 +1220,71 @@ int wally_psbt_output_set_amount(struct wally_psbt_output *output, uint64_t amou
     output->amount = amount;
     output->has_amount = 1u;
     return WALLY_OK;
+}
+
+/* BIP375 shares and proofs are keyed by scan pubkey, and are set one at a
+ * time as each recipient is resolved, so only set/find are provided here.
+ */
+#define SP_FIND_MAP(PARENT, NAME, FIELD) \
+    int PARENT ## _find_ ## NAME(const struct PARENT *parent, \
+                                 const unsigned char *scan_key, size_t scan_key_len, \
+                                 size_t *written) { \
+        if (written) *written = 0; \
+        if (!parent) return WALLY_EINVAL; \
+        return wally_map_find(&parent->FIELD, scan_key, scan_key_len, written); \
+    }
+
+SP_FIND_MAP(wally_psbt, global_sp_ecdh_share, global_sp_ecdh_shares)
+SP_FIND_MAP(wally_psbt, global_sp_dleq_proof, global_sp_dleq_proofs)
+SP_FIND_MAP(wally_psbt_input, sp_ecdh_share, sp_ecdh_shares)
+SP_FIND_MAP(wally_psbt_input, sp_dleq_proof, sp_dleq_proofs)
+
+int wally_psbt_input_set_sp_ecdh_share(struct wally_psbt_input *input,
+                                       const unsigned char *scan_key,
+                                       size_t scan_key_len,
+                                       const unsigned char *share,
+                                       size_t share_len)
+{
+    if (!input)
+        return WALLY_EINVAL;
+    return wally_map_replace(&input->sp_ecdh_shares, scan_key,
+                             scan_key_len, share, share_len);
+}
+
+int wally_psbt_input_set_sp_dleq_proof(struct wally_psbt_input *input,
+                                       const unsigned char *scan_key,
+                                       size_t scan_key_len,
+                                       const unsigned char *proof,
+                                       size_t proof_len)
+{
+    if (!input)
+        return WALLY_EINVAL;
+    return wally_map_replace(&input->sp_dleq_proofs, scan_key,
+                             scan_key_len, proof, proof_len);
+}
+
+int wally_psbt_set_global_sp_ecdh_share(struct wally_psbt *psbt,
+                                        const unsigned char *scan_key,
+                                        size_t scan_key_len,
+                                        const unsigned char *share,
+                                        size_t share_len)
+{
+    if (!psbt)
+        return WALLY_EINVAL;
+    return wally_map_replace(&psbt->global_sp_ecdh_shares, scan_key,
+                             scan_key_len, share, share_len);
+}
+
+int wally_psbt_set_global_sp_dleq_proof(struct wally_psbt *psbt,
+                                        const unsigned char *scan_key,
+                                        size_t scan_key_len,
+                                        const unsigned char *proof,
+                                        size_t proof_len)
+{
+    if (!psbt)
+        return WALLY_EINVAL;
+    return wally_map_replace(&psbt->global_sp_dleq_proofs, scan_key,
+                             scan_key_len, proof, proof_len);
 }
 
 int wally_psbt_output_clear_amount(struct wally_psbt_output *output)
@@ -1493,6 +1590,10 @@ static int psbt_init(uint32_t version, size_t num_inputs, size_t num_outputs,
     ret = wally_map_init(num_unknowns, NULL, &psbt_out->unknowns);
     if (ret == WALLY_OK)
         ret = wally_map_init(0, wally_keypath_bip32_verify, &psbt_out->global_xpubs);
+    if (ret == WALLY_OK)
+        ret = wally_map_init(0, sp_ecdh_share_verify, &psbt_out->global_sp_ecdh_shares);
+    if (ret == WALLY_OK)
+        ret = wally_map_init(0, sp_dleq_verify, &psbt_out->global_sp_dleq_proofs);
 #ifdef BUILD_ELEMENTS
     if (ret == WALLY_OK)
         ret = wally_map_init(0, scalar_verify, &psbt_out->global_scalars);
@@ -1504,6 +1605,8 @@ static int psbt_init(uint32_t version, size_t num_inputs, size_t num_outputs,
         wally_free(psbt_out->inputs);
         wally_free(psbt_out->outputs);
         wally_map_clear(&psbt_out->unknowns);
+        wally_map_clear(&psbt_out->global_sp_ecdh_shares);
+        wally_map_clear(&psbt_out->global_sp_dleq_proofs);
         wally_clear(psbt_out, sizeof(*psbt_out));
         return ret != WALLY_OK ? ret : WALLY_ENOMEM;
     }
@@ -1606,6 +1709,8 @@ int wally_psbt_free(struct wally_psbt *psbt)
 
         wally_map_clear(&psbt->unknowns);
         wally_map_clear(&psbt->global_xpubs);
+        wally_map_clear(&psbt->global_sp_ecdh_shares);
+        wally_map_clear(&psbt->global_sp_dleq_proofs);
 #ifdef BUILD_ELEMENTS
         wally_map_clear(&psbt->global_scalars);
 #endif /* BUILD_ELEMENTS */
@@ -2776,6 +2881,14 @@ static int pull_psbt_input(const struct wally_psbt *psbt,
             case PSBT_IN_MUSIG2_PARTIAL_SIG:
                 ret = pull_map_item(cursor, max, key, key_len, &result->musig2_partial_sigs);
                 break;
+            case PSBT_IN_SP_ECDH_SHARE:
+                ret = pull_map_item(cursor, max, key, key_len,
+                                    &result->sp_ecdh_shares);
+                break;
+            case PSBT_IN_SP_DLEQ:
+                ret = pull_map_item(cursor, max, key, key_len,
+                                    &result->sp_dleq_proofs);
+                break;
 #ifdef BUILD_ELEMENTS
             case PSET_FT(PSET_IN_EXPLICIT_VALUE):
                 ret = wally_psbt_input_set_amount(result, pull_le64_subfield(cursor, max));
@@ -2900,9 +3013,10 @@ static int pull_psbt_output(const struct wally_psbt *psbt,
                 field_bit = field_type;
             }
         } else {
-            is_known = field_type <= PSBT_OUT_MAX;
-            if (is_known)
+            is_known = field_type < 32;
+            if (is_known) {
                 field_bit = PSBT_FT(field_type);
+            }
         }
 
         /* Process based on type */
@@ -2931,6 +3045,8 @@ static int pull_psbt_output(const struct wally_psbt *psbt,
             case PSBT_OUT_REDEEM_SCRIPT:
             case PSBT_OUT_WITNESS_SCRIPT:
             case PSBT_OUT_TAP_INTERNAL_KEY:
+            case PSBT_OUT_SP_V0_INFO:
+            case PSBT_OUT_SP_V0_LABEL:
                 pull_varlength_buff(cursor, max, &val_p, &val_len);
                 ret = wally_map_add_integer(&result->psbt_fields, raw_field_type,
                                             val_p, val_len);
@@ -2991,6 +3107,17 @@ unknown:
             ret = WALLY_EINVAL; /* Mandatory field is missing*/
         else if (disallowed && (keyset & disallowed))
             ret = WALLY_EINVAL; /* Disallowed field present */
+        else if (!is_pset && psbt->version == PSBT_2 &&
+                 !(keyset & PSBT_FT(PSBT_OUT_SCRIPT)) &&
+                 !(keyset & PSBT_FT(PSBT_OUT_SP_V0_INFO)))
+            ret = WALLY_EINVAL; /* Script or silent payment info is mandatory */
+        else if (!is_pset && (keyset & PSBT_FT(PSBT_OUT_SP_V0_LABEL)) &&
+                 !(keyset & PSBT_FT(PSBT_OUT_SP_V0_INFO)))
+            ret = WALLY_EINVAL; /* Silent payment label requires payment info */
+        else if (!is_pset && (keyset & PSBT_FT(PSBT_OUT_SP_V0_INFO)) &&
+                 result->script_len &&
+                 (psbt->tx_modifiable_flags & PSBT_TXMOD_MODIFIABLE_FLAGS))
+            ret = WALLY_EINVAL; /* Resolved outputs must not be modifiable */
     }
 #ifdef BUILD_ELEMENTS
     if (ret == WALLY_OK && is_pset) {
@@ -3055,7 +3182,9 @@ int wally_psbt_from_bytes(const unsigned char *bytes, size_t len,
                 field_bit = field_type;
             }
         } else {
-            is_known = field_type <= PSBT_GLOBAL_MAX || field_type == PSBT_GLOBAL_VERSION;
+            is_known = field_type <= PSBT_GLOBAL_TX_MODIFIABLE ||
+                       (!is_pset && field_type <= PSBT_GLOBAL_MAX) ||
+                       field_type == PSBT_GLOBAL_VERSION;
             if (is_known) {
                 if (field_type == PSBT_GLOBAL_VERSION)
                     field_bit = PSBT_GLOBAL_VERSION_BIT;
@@ -3110,6 +3239,14 @@ int wally_psbt_from_bytes(const unsigned char *bytes, size_t len,
                 (*output)->tx_modifiable_flags = pull_u8_subfield(cursor, max);
                 if ((*output)->tx_modifiable_flags & ~PSBT_TXMOD_ALL_FLAGS)
                     ret = WALLY_EINVAL; /* Invalid flags */
+                break;
+            case PSBT_GLOBAL_SP_ECDH_SHARE:
+                ret = pull_map_item(cursor, max, key, key_len,
+                                    &(*output)->global_sp_ecdh_shares);
+                break;
+            case PSBT_GLOBAL_SP_DLEQ:
+                ret = pull_map_item(cursor, max, key, key_len,
+                                    &(*output)->global_sp_dleq_proofs);
                 break;
 #ifdef BUILD_ELEMENTS
             case PSET_FT(PSET_GLOBAL_SCALAR): {
@@ -3465,6 +3602,10 @@ static int push_psbt_input(const struct wally_psbt *psbt,
     int ret;
     const struct wally_map_item *final_scriptsig;
 
+    if ((is_pset || psbt->version == PSBT_0) &&
+        (input->sp_ecdh_shares.num_items || input->sp_dleq_proofs.num_items))
+        return WALLY_EINVAL;
+
     /* Non witness utxo */
     if (input->utxo) {
         push_psbt_key(cursor, max, PSBT_IN_NON_WITNESS_UTXO, NULL, 0);
@@ -3594,6 +3735,13 @@ static int push_psbt_input(const struct wally_psbt *psbt,
     push_psbt_map(cursor, max, PSBT_IN_MUSIG2_PARTIAL_SIG, false,
                   &input->musig2_partial_sigs);
 
+    if (!is_pset) {
+        push_psbt_map(cursor, max, PSBT_IN_SP_ECDH_SHARE, false,
+                      &input->sp_ecdh_shares);
+        push_psbt_map(cursor, max, PSBT_IN_SP_DLEQ, false,
+                      &input->sp_dleq_proofs);
+    }
+
 #ifdef BUILD_ELEMENTS
     if (is_pset && psbt->version == PSBT_2) {
         uint32_t ft;
@@ -3652,7 +3800,13 @@ static int push_psbt_output(const struct wally_psbt *psbt,
 {
     size_t i;
     unsigned char dummy = 0;
+    const struct wally_map_item *sp_info;
     int ret;
+
+    if ((is_pset || psbt->version == PSBT_0) &&
+        (wally_map_get_integer(&output->psbt_fields, PSBT_OUT_SP_V0_INFO) ||
+         wally_map_get_integer(&output->psbt_fields, PSBT_OUT_SP_V0_LABEL)))
+        return WALLY_EINVAL;
 
     if ((ret = push_varbuff_from_map(cursor, max, PSBT_OUT_REDEEM_SCRIPT,
                                      PSBT_OUT_REDEEM_SCRIPT,
@@ -3668,16 +3822,24 @@ static int push_psbt_output(const struct wally_psbt *psbt,
     push_psbt_map(cursor, max, PSBT_OUT_BIP32_DERIVATION, false, &output->keypaths);
 
     if (psbt->version == PSBT_2) {
-        if (!is_pset && (!output->has_amount || !output->script || !output->script_len))
+        sp_info = wally_map_get_integer(&output->psbt_fields, PSBT_OUT_SP_V0_INFO);
+        if (!is_pset && (!output->has_amount || (!output->script_len && !sp_info)))
             return WALLY_EINVAL; /* Must be provided */
+        if (!is_pset &&
+            wally_map_get_integer(&output->psbt_fields, PSBT_OUT_SP_V0_LABEL) &&
+            !sp_info)
+            return WALLY_EINVAL; /* Silent payment label requires payment info */
+        if (!is_pset && sp_info && output->script_len &&
+            (psbt->tx_modifiable_flags & PSBT_TXMOD_MODIFIABLE_FLAGS))
+            return WALLY_EINVAL; /* Resolved outputs must not be modifiable */
 
         if (output->has_amount)
             push_psbt_le64(cursor, max, PSBT_OUT_AMOUNT, false, output->amount);
 
-        /* Core/Elements always write the script; if missing its written as empty */
-        push_psbt_varbuff(cursor, max, PSBT_OUT_SCRIPT, false,
-                          output->script ? output->script : &dummy,
-                          output->script_len);
+        if (is_pset || output->script_len)
+            push_psbt_varbuff(cursor, max, PSBT_OUT_SCRIPT, false,
+                              output->script ? output->script : &dummy,
+                              output->script_len);
     }
 
     if ((ret = push_varbuff_from_map(cursor, max, PSBT_OUT_TAP_INTERNAL_KEY,
@@ -3702,6 +3864,17 @@ static int push_psbt_output(const struct wally_psbt *psbt,
 
     push_psbt_map(cursor, max, PSBT_OUT_MUSIG2_PARTICIPANT_PUBKEYS, false,
                   &output->musig2_pubkeys);
+
+    if (!is_pset) {
+        if ((ret = push_varbuff_from_map(cursor, max, PSBT_OUT_SP_V0_INFO,
+                                         PSBT_OUT_SP_V0_INFO,
+                                         false, &output->psbt_fields)) != WALLY_OK)
+            return ret;
+        if ((ret = push_varbuff_from_map(cursor, max, PSBT_OUT_SP_V0_LABEL,
+                                         PSBT_OUT_SP_V0_LABEL,
+                                         false, &output->psbt_fields)) != WALLY_OK)
+            return ret;
+    }
 
 #ifdef BUILD_ELEMENTS
     if (is_pset && psbt->version == PSBT_2) {
@@ -3793,6 +3966,11 @@ int wally_psbt_to_bytes(const struct wally_psbt *psbt, uint32_t flags,
     if ((ret = wally_psbt_is_elements(psbt, &is_pset)) != WALLY_OK)
         return ret;
 
+    if ((is_pset || psbt->version == PSBT_0) &&
+        (psbt->global_sp_ecdh_shares.num_items ||
+         psbt->global_sp_dleq_proofs.num_items))
+        return WALLY_EINVAL;
+
     tx_flags = is_pset ? WALLY_TX_FLAG_USE_ELEMENTS : 0;
     push_bytes(&cursor, &max, psbt->magic, sizeof(psbt->magic));
 
@@ -3823,6 +4001,12 @@ int wally_psbt_to_bytes(const struct wally_psbt *psbt, uint32_t flags,
             push_psbt_key(&cursor, &max, PSBT_GLOBAL_TX_MODIFIABLE, NULL, 0);
             push_varint(&cursor, &max, sizeof(uint8_t));
             push_u8(&cursor, &max, psbt->tx_modifiable_flags & 0xff);
+        }
+        if (!is_pset) {
+            push_psbt_map(&cursor, &max, PSBT_GLOBAL_SP_ECDH_SHARE, false,
+                          &psbt->global_sp_ecdh_shares);
+            push_psbt_map(&cursor, &max, PSBT_GLOBAL_SP_DLEQ, false,
+                          &psbt->global_sp_dleq_proofs);
         }
 #ifdef BUILD_ELEMENTS
         push_psbt_map(&cursor, &max, PSET_GLOBAL_SCALAR, true, &psbt->global_scalars);
@@ -4049,6 +4233,10 @@ static int combine_input(struct wally_psbt_input *dst,
         return ret;
     if ((ret = wally_map_combine(&dst->psbt_fields, &src->psbt_fields)) != WALLY_OK)
         return ret;
+    if ((ret = wally_map_combine(&dst->sp_ecdh_shares, &src->sp_ecdh_shares)) != WALLY_OK)
+        return ret;
+    if ((ret = wally_map_combine(&dst->sp_dleq_proofs, &src->sp_dleq_proofs)) != WALLY_OK)
+        return ret;
     if ((ret = combine_map_if_empty(&dst->taproot_leaf_signatures, &src->taproot_leaf_signatures)) != WALLY_OK)
         return ret;
     if ((ret = combine_map_if_empty(&dst->taproot_leaf_scripts, &src->taproot_leaf_scripts)) != WALLY_OK)
@@ -4249,6 +4437,14 @@ static int psbt_combine(struct wally_psbt *psbt, const struct wally_psbt *src,
 
     if (ret == WALLY_OK)
         ret = wally_map_combine(&psbt->global_xpubs, &src->global_xpubs);
+
+    if (ret == WALLY_OK)
+        ret = wally_map_combine(&psbt->global_sp_ecdh_shares,
+                                &src->global_sp_ecdh_shares);
+
+    if (ret == WALLY_OK)
+        ret = wally_map_combine(&psbt->global_sp_dleq_proofs,
+                                &src->global_sp_dleq_proofs);
 
 #ifdef BUILD_ELEMENTS
     if (ret == WALLY_OK && is_pset) {
@@ -4453,6 +4649,21 @@ static int psbt_build_output(const struct wally_psbt_output *src,
     }
     if (!src->has_amount)
         return WALLY_EINVAL;
+    /* wally_psbt_get_id builds with unblinded set. BIP375 requires the
+     * address data, rather than a present or computed script, in that ID. */
+    if (unblinded && !is_pset) {
+        const struct wally_map_item *sp_info;
+        sp_info = wally_map_get_integer(&src->psbt_fields, PSBT_OUT_SP_V0_INFO);
+        if (sp_info) {
+            unsigned char pseudo_script[1 + EC_PUBLIC_KEY_LEN * 2];
+            pseudo_script[0] = 0;
+            memcpy(pseudo_script + 1, sp_info->value, sp_info->value_len);
+            return wally_tx_add_raw_output(tx, src->amount,
+                                           pseudo_script, sizeof(pseudo_script), 0);
+        }
+    }
+    if (!src->script_len)
+        return WALLY_EINVAL; /* An unresolved silent payment is not extractable */
     return wally_tx_add_raw_output(tx, src->amount, src->script, src->script_len, 0);
 }
 
@@ -4541,7 +4752,25 @@ static int psbt_v2_to_v0(struct wally_psbt *psbt)
 {
     size_t i;
     bool is_pset;
-    int ret = psbt_build_tx(psbt, &psbt->tx, &is_pset, false);
+    int ret;
+
+    if (psbt->global_sp_ecdh_shares.num_items ||
+        psbt->global_sp_dleq_proofs.num_items)
+        return WALLY_EINVAL;
+    for (i = 0; i < psbt->num_inputs; ++i) {
+        if (psbt->inputs[i].sp_ecdh_shares.num_items ||
+            psbt->inputs[i].sp_dleq_proofs.num_items)
+            return WALLY_EINVAL;
+    }
+    for (i = 0; i < psbt->num_outputs; ++i) {
+        if (wally_map_get_integer(&psbt->outputs[i].psbt_fields,
+                                  PSBT_OUT_SP_V0_INFO) ||
+            wally_map_get_integer(&psbt->outputs[i].psbt_fields,
+                                  PSBT_OUT_SP_V0_LABEL))
+            return WALLY_EINVAL;
+    }
+
+    ret = psbt_build_tx(psbt, &psbt->tx, &is_pset, false);
 
     if (ret != WALLY_OK)
         return ret;
@@ -6724,6 +6953,8 @@ PSBT_GET_S(input, final_witness, wally_tx_witness_stack, wally_tx_witness_stack_
 PSBT_GET_M(input, keypath)
 PSBT_GET_M(input, signature)
 PSBT_GET_M(input, unknown)
+PSBT_GET_M(input, sp_ecdh_share)
+PSBT_GET_M(input, sp_dleq_proof)
 PSBT_GET_I(input, sighash, size_t, PSBT_0)
 
 int wally_psbt_get_input_previous_txid(const struct wally_psbt *psbt, size_t index,
@@ -6857,6 +7088,8 @@ int wally_psbt_clear_input_required_lockheight(struct wally_psbt *psbt, size_t i
     return wally_psbt_input_clear_required_lockheight(psbt_get_input(psbt, index));
 }
 PSBT_FIELD(output, taproot_internal_key, PSBT_0)
+PSBT_FIELD(output, sp_v0_info, PSBT_2)
+PSBT_FIELD(output, sp_v0_label, PSBT_2)
 
 #ifndef WALLY_ABI_NO_ELEMENTS
 #ifndef BUILD_ELEMENTS

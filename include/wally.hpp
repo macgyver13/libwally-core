@@ -1542,6 +1542,18 @@ inline int psbt_finalize_input(const PSBT& psbt, size_t index, uint32_t flags) {
     return detail::check_ret(__FUNCTION__, ret);
 }
 
+template <class PSBT, class SCAN_KEY>
+inline int psbt_find_global_sp_dleq_proof(const PSBT& psbt, const SCAN_KEY& scan_key, size_t* written) {
+    int ret = ::wally_psbt_find_global_sp_dleq_proof(detail::get_p(psbt), scan_key.data(), scan_key.size(), written);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT, class SCAN_KEY>
+inline int psbt_find_global_sp_ecdh_share(const PSBT& psbt, const SCAN_KEY& scan_key, size_t* written) {
+    int ret = ::wally_psbt_find_global_sp_ecdh_share(detail::get_p(psbt), scan_key.data(), scan_key.size(), written);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
 template <class PSBT, class TXHASH>
 inline int psbt_find_input_spending_utxo(const PSBT& psbt, const TXHASH& txhash, uint32_t utxo_index, size_t* written) {
     int ret = ::wally_psbt_find_input_spending_utxo(detail::get_p(psbt), txhash.data(), txhash.size(), utxo_index, written);
@@ -1846,6 +1858,12 @@ inline int psbt_input_set_sighash(const INPUT& input, uint32_t sighash) {
 template <class INPUT>
 inline int psbt_input_set_signatures(const INPUT& input, const struct wally_map* map_in) {
     int ret = ::wally_psbt_input_set_signatures(detail::get_p(input), map_in);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class INPUT, class SCAN_KEY, class SHARE>
+inline int psbt_input_set_sp_ecdh_share(const INPUT& input, const SCAN_KEY& scan_key, const SHARE& share) {
+    int ret = ::wally_psbt_input_set_sp_ecdh_share(detail::get_p(input), scan_key.data(), scan_key.size(), share.data(), share.size());
     return detail::check_ret(__FUNCTION__, ret);
 }
 
