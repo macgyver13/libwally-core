@@ -437,6 +437,7 @@ export function psbt_get_output_value_commitment_len(psbt: Ref_wally_psbt, index
 export function psbt_get_output_value_rangeproof_len(psbt: Ref_wally_psbt, index: number): number;
 export function psbt_get_output_witness_script_len(psbt: Ref_wally_psbt, index: number): number;
 export function psbt_get_pset_modifiable_flags(psbt: Ref_wally_psbt): number;
+export function psbt_get_sp_musig_status(psbt: Ref_wally_psbt, musig_inputs: Ref_wally_sp_musig_input, num_musig_inputs: number, flags: number): number;
 export function psbt_get_sp_smallest_outpoint(psbt: Ref_wally_psbt): Buffer;
 export function psbt_get_sp_status(psbt: Ref_wally_psbt, flags: number): number;
 export function psbt_get_tx_modifiable_flags(psbt: Ref_wally_psbt): number;
@@ -479,6 +480,8 @@ export function psbt_input_find_musig2_partial_sig(input: Ref_wally_psbt_input, 
 export function psbt_input_find_musig2_pubkey(input: Ref_wally_psbt_input, agg_pubkey: Buffer|Uint8Array|null): number;
 export function psbt_input_find_musig2_pubnonce(input: Ref_wally_psbt_input, participant: Buffer|Uint8Array|null, agg_pubkey: Buffer|Uint8Array|null, leaf_hash: Buffer|Uint8Array|null): number;
 export function psbt_input_find_signature(input: Ref_wally_psbt_input, pub_key: Buffer|Uint8Array|null): number;
+export function psbt_input_find_sp_partial_dleq_proof(input: Ref_wally_psbt_input, scan_key: Buffer|Uint8Array|null, participant: Buffer|Uint8Array|null): number;
+export function psbt_input_find_sp_partial_ecdh_share(input: Ref_wally_psbt_input, scan_key: Buffer|Uint8Array|null, participant: Buffer|Uint8Array|null): number;
 export function psbt_input_find_unknown(input: Ref_wally_psbt_input, key: Buffer|Uint8Array|null): number;
 export function psbt_input_generate_explicit_proofs(input: Ref_wally_psbt_input, satoshi: bigint, asset: Buffer|Uint8Array|null, abf: Buffer|Uint8Array|null, vbf: Buffer|Uint8Array|null, entropy: Buffer|Uint8Array|null): void;
 export function psbt_input_get_amount_rangeproof_len(input: Ref_wally_psbt_input): number;
@@ -536,6 +539,8 @@ export function psbt_input_set_required_locktime(input: Ref_wally_psbt_input, re
 export function psbt_input_set_sequence(input: Ref_wally_psbt_input, sequence: number): void;
 export function psbt_input_set_sighash(input: Ref_wally_psbt_input, sighash: number): void;
 export function psbt_input_set_signatures(input: Ref_wally_psbt_input, map_in: Ref_wally_map): void;
+export function psbt_input_set_sp_partial_dleq_proof(input: Ref_wally_psbt_input, scan_key: Buffer|Uint8Array|null, participant: Buffer|Uint8Array|null, proof: Buffer|Uint8Array|null): void;
+export function psbt_input_set_sp_partial_ecdh_share(input: Ref_wally_psbt_input, scan_key: Buffer|Uint8Array|null, participant: Buffer|Uint8Array|null, share: Buffer|Uint8Array|null): void;
 export function psbt_input_set_taproot_internal_key(input: Ref_wally_psbt_input, pub_key: Buffer|Uint8Array|null): void;
 export function psbt_input_set_taproot_signature(input: Ref_wally_psbt_input, tap_sig: Buffer|Uint8Array|null): void;
 export function psbt_input_set_unknowns(input: Ref_wally_psbt_input, map_in: Ref_wally_map): void;
@@ -672,6 +677,8 @@ export function psbt_sign_input_bip32(psbt: Ref_wally_psbt, index: number, subin
 export function psbt_signing_cache_disable(psbt: Ref_wally_psbt): void;
 export function psbt_signing_cache_enable(psbt: Ref_wally_psbt, flags: number): void;
 export function psbt_sp_contribute(psbt: Ref_wally_psbt, indices: Uint32Array|number[], priv_keys: Buffer|Uint8Array|null, entropy: Buffer|Uint8Array|null, flags: number): void;
+export function psbt_sp_musig_contribute(psbt: Ref_wally_psbt, musig_inputs: Ref_wally_sp_musig_input, num_musig_inputs: number, priv_keys: Buffer|Uint8Array|null, entropy: Buffer|Uint8Array|null, flags: number): void;
+export function psbt_sp_musig_resolve_shares(psbt: Ref_wally_psbt, musig_inputs: Ref_wally_sp_musig_input, num_musig_inputs: number, flags: number): void;
 export function psbt_sp_resolve(psbt: Ref_wally_psbt, priv_keys: Buffer|Uint8Array|null, entropy: Buffer|Uint8Array|null, flags: number): void;
 export function psbt_sp_resolve_shares(psbt: Ref_wally_psbt, flags: number): void;
 export function psbt_to_base64(psbt: Ref_wally_psbt, flags: number): string;
