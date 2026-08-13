@@ -357,6 +357,7 @@ check-libwallycore: $(PYTHON_TEST_DEPS)
 	$(AM_V_at)$(PYTHON_TEST) test/test_musig.py
 	$(AM_V_at)$(PYTHON_TEST) test/test_musig_vectors.py
 	$(AM_V_at)$(PYTHON_TEST) test/test_musig_interop.py
+	$(AM_V_at)$(PYTHON_TEST) test/test_musig_sp.py
 	$(AM_V_at)$(PYTHON_TEST) test/test_psbt.py
 	$(AM_V_at)$(PYTHON_TEST) test/test_pbkdf2.py
 	$(AM_V_at)$(PYTHON_TEST) test/test_script.py
