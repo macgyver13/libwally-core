@@ -1,6 +1,8 @@
 #include "internal.h"
 
 #include <include/wally_descriptor.h>
+#include <include/wally_bip32.h>
+#include <include/wally_crypto.h>
 #include <include/wally_elements.h>
 #include <include/wally_musig.h>
 #include <include/wally_script.h>
@@ -8156,6 +8158,182 @@ static int musig2_input_sighash(struct wally_psbt *psbt, size_t index,
     return ret == WALLY_OK ? WALLY_OK : WALLY_EINVAL;
 }
 
+/* Build the BIP-328 aggregate-then-derive cache for an input. The participant
+ * map remains keyed by the bare aggregate, while the resulting cache contains
+ * the derived aggregate used as the taproot internal key. */
+static int musig2_agg_then_derive_cache(
+    const struct wally_psbt *psbt, size_t index,
+    const unsigned char *agg_pubkey,
+    const uint32_t *path, size_t path_len,
+    struct wally_musig_keyagg_cache **cache_out,
+    unsigned char *derived_agg_out)
+{
+    const struct wally_map_item *pubkeys_item, *internal_key;
+    struct wally_musig_keyagg_cache *cache = NULL;
+    struct ext_key *xpub = NULL, *child = NULL;
+    unsigned char bare_agg[EC_PUBLIC_KEY_LEN];
+    unsigned char data[EC_PUBLIC_KEY_LEN + sizeof(uint32_t)];
+    unsigned char hmac[HMAC_SHA512_LEN];
+    size_t i;
+    int ret;
+
+    if (!psbt || index >= psbt->num_inputs || !agg_pubkey ||
+        (!path && path_len) || !cache_out || !derived_agg_out)
+        return WALLY_EINVAL;
+    *cache_out = NULL;
+
+    pubkeys_item = wally_map_get(&psbt->inputs[index].musig2_pubkeys,
+                                 agg_pubkey, EC_PUBLIC_KEY_LEN);
+    if (!pubkeys_item || !pubkeys_item->value ||
+        pubkeys_item->value_len < EC_PUBLIC_KEY_LEN * 2 ||
+        pubkeys_item->value_len % EC_PUBLIC_KEY_LEN)
+        return WALLY_EINVAL;
+
+    ret = wally_musig_pubkey_agg(pubkeys_item->value,
+                                 pubkeys_item->value_len,
+                                 NULL, 0, &cache);
+    if (ret == WALLY_OK)
+        ret = wally_musig_pubkey_get(cache, bare_agg, sizeof(bare_agg));
+    if (ret != WALLY_OK || memcmp(bare_agg, agg_pubkey, sizeof(bare_agg))) {
+        ret = WALLY_EINVAL;
+        goto done;
+    }
+    ret = wally_musig_pubkey_to_xpub(bare_agg, sizeof(bare_agg),
+                                     BIP32_VER_MAIN_PUBLIC, &xpub);
+    if (ret != WALLY_OK)
+        goto done;
+
+    for (i = 0; i < path_len; ++i) {
+        if (path[i] >= BIP32_INITIAL_HARDENED_CHILD) {
+            ret = WALLY_EINVAL;
+            goto done;
+        }
+        memcpy(data, xpub->pub_key, EC_PUBLIC_KEY_LEN);
+        data[EC_PUBLIC_KEY_LEN] = (unsigned char)(path[i] >> 24);
+        data[EC_PUBLIC_KEY_LEN + 1] = (unsigned char)(path[i] >> 16);
+        data[EC_PUBLIC_KEY_LEN + 2] = (unsigned char)(path[i] >> 8);
+        data[EC_PUBLIC_KEY_LEN + 3] = (unsigned char)path[i];
+        ret = wally_hmac_sha512(xpub->chain_code, sizeof(xpub->chain_code),
+                                data, sizeof(data), hmac, sizeof(hmac));
+        if (ret == WALLY_OK)
+            ret = wally_musig_pubkey_ec_tweak_add(cache, hmac,
+                                                  EC_PRIVATE_KEY_LEN,
+                                                  derived_agg_out,
+                                                  EC_PUBLIC_KEY_LEN);
+        if (ret == WALLY_OK)
+            ret = bip32_key_from_parent_alloc(xpub, path[i],
+                                              BIP32_FLAG_KEY_PUBLIC, &child);
+        if (ret != WALLY_OK)
+            goto done;
+        bip32_key_free(xpub);
+        xpub = child;
+        child = NULL;
+    }
+    if (!path_len)
+        memcpy(derived_agg_out, bare_agg, sizeof(bare_agg));
+
+    internal_key = wally_map_get_integer(&psbt->inputs[index].psbt_fields,
+                                         PSBT_IN_TAP_INTERNAL_KEY);
+    if (!internal_key || internal_key->value_len != EC_XONLY_PUBLIC_KEY_LEN ||
+        memcmp(internal_key->value, derived_agg_out + 1,
+               EC_XONLY_PUBLIC_KEY_LEN)) {
+        ret = WALLY_EINVAL;
+        goto done;
+    }
+
+    *cache_out = cache;
+    cache = NULL;
+    ret = WALLY_OK;
+
+done:
+    bip32_key_free(child);
+    bip32_key_free(xpub);
+    wally_musig_keyagg_cache_free(cache);
+    wally_clear_2(bare_agg, sizeof(bare_agg), hmac, sizeof(hmac));
+    wally_clear(data, sizeof(data));
+    return ret;
+}
+
+static int musig2_add_nonce_internal(
+    struct wally_psbt *psbt, size_t index,
+    const unsigned char *session_secrand32, size_t session_secrand_len,
+    const unsigned char *seckey, size_t seckey_len,
+    const unsigned char *pubkey33, size_t pubkey33_len,
+    const unsigned char *participants_key,
+    const unsigned char *composite_key,
+    const struct wally_musig_keyagg_cache *keyagg_cache,
+    const unsigned char *msg32, size_t msg32_len,
+    uint32_t flags, struct wally_musig_secnonce **secnonce_out)
+{
+    struct wally_musig_secnonce *secnonce = NULL;
+    struct wally_musig_pubnonce *pubnonce = NULL;
+    const struct wally_map_item *pubkeys_item;
+    unsigned char sighash[SHA256_LEN];
+    unsigned char pubnonce_bytes[WALLY_MUSIG_PUBNONCE_LEN];
+    size_t existing = 0, i;
+    const unsigned char *nonce_msg = msg32;
+    size_t nonce_msg_len = msg32_len;
+    int ret;
+
+    if (!psbt || index >= psbt->num_inputs ||
+        !session_secrand32 || session_secrand_len != 32 ||
+        (seckey && seckey_len != EC_PRIVATE_KEY_LEN) ||
+        (!seckey && seckey_len) ||
+        !pubkey33 || pubkey33_len != EC_PUBLIC_KEY_LEN ||
+        !participants_key || !composite_key ||
+        (msg32 && msg32_len != SHA256_LEN) || (!msg32 && msg32_len) ||
+        flags || !secnonce_out)
+        return WALLY_EINVAL;
+    *secnonce_out = NULL;
+
+    pubkeys_item = wally_map_get(&psbt->inputs[index].musig2_pubkeys,
+                                 participants_key, EC_PUBLIC_KEY_LEN);
+    if (!pubkeys_item || !pubkeys_item->value ||
+        pubkeys_item->value_len < EC_PUBLIC_KEY_LEN * 2 ||
+        pubkeys_item->value_len % EC_PUBLIC_KEY_LEN)
+        return WALLY_EINVAL;
+    for (i = 0; i < pubkeys_item->value_len; i += EC_PUBLIC_KEY_LEN)
+        if (!memcmp(pubkeys_item->value + i, pubkey33, EC_PUBLIC_KEY_LEN))
+            break;
+    if (i >= pubkeys_item->value_len)
+        return WALLY_EINVAL;
+
+    ret = wally_psbt_input_find_musig2_pubnonce(
+        &psbt->inputs[index], pubkey33, pubkey33_len,
+        composite_key, EC_PUBLIC_KEY_LEN, NULL, 0, &existing);
+    if (ret != WALLY_OK)
+        return ret;
+    if (existing)
+        return WALLY_ERROR;
+
+    if (!nonce_msg &&
+        musig2_input_sighash(psbt, index, sighash, sizeof(sighash)) == WALLY_OK) {
+        nonce_msg = sighash;
+        nonce_msg_len = sizeof(sighash);
+    }
+    ret = wally_musig_nonce_gen(session_secrand32, session_secrand_len,
+                                seckey, seckey_len, pubkey33, pubkey33_len,
+                                keyagg_cache, nonce_msg, nonce_msg_len,
+                                NULL, 0, &secnonce, &pubnonce);
+    if (ret == WALLY_OK)
+        ret = wally_musig_pubnonce_serialize(pubnonce, pubnonce_bytes,
+                                             sizeof(pubnonce_bytes));
+    if (ret == WALLY_OK)
+        ret = wally_psbt_input_add_musig2_pubnonce(
+            &psbt->inputs[index], pubkey33, pubkey33_len,
+            composite_key, EC_PUBLIC_KEY_LEN, NULL, 0,
+            pubnonce_bytes, sizeof(pubnonce_bytes));
+    if (ret == WALLY_OK) {
+        *secnonce_out = secnonce;
+        secnonce = NULL;
+    }
+    wally_musig_pubnonce_free(pubnonce);
+    wally_musig_secnonce_free(secnonce);
+    wally_clear_2(sighash, sizeof(sighash), pubnonce_bytes,
+                  sizeof(pubnonce_bytes));
+    return ret;
+}
+
 int wally_psbt_musig2_add_nonce(
     struct wally_psbt *psbt,
     size_t index,
@@ -8173,26 +8351,6 @@ int wally_psbt_musig2_add_nonce(
     uint32_t flags,
     struct wally_musig_secnonce **secnonce_out)
 {
-    struct wally_musig_secnonce *secnonce = NULL;
-    struct wally_musig_pubnonce *pubnonce = NULL;
-    const struct wally_map_item *pubkeys_item;
-    unsigned char sighash[SHA256_LEN];
-    unsigned char pubnonce_bytes[WALLY_MUSIG_PUBNONCE_LEN];
-    size_t existing = 0, i;
-    const unsigned char *msg32 = NULL;
-    size_t msg_len = 0;
-    int ret;
-
-    if (!psbt || index >= psbt->num_inputs)
-        return WALLY_EINVAL;
-    if (!session_secrand32 || session_secrand_len != 32)
-        return WALLY_EINVAL;
-    if (seckey && seckey_len != EC_PRIVATE_KEY_LEN)
-        return WALLY_EINVAL;
-    if (!seckey && seckey_len != 0)
-        return WALLY_EINVAL;
-    if (!pubkey33 || pubkey33_len != EC_PUBLIC_KEY_LEN)
-        return WALLY_EINVAL;
     if (!agg_pubkey || agg_pubkey_len != EC_PUBLIC_KEY_LEN)
         return WALLY_EINVAL;
     if (leaf_hash && leaf_hash_len != SHA256_LEN)
@@ -8201,80 +8359,11 @@ int wally_psbt_musig2_add_nonce(
         return WALLY_EINVAL;
     if (leaf_hash)
         return WALLY_EINVAL; /* Script-path MuSig2 not yet supported (would sign a key-path BIP-341 sighash) */
-    if (flags)
-        return WALLY_EINVAL;
-    if (!secnonce_out)
-        return WALLY_EINVAL;
-    *secnonce_out = NULL;
-
-    /* Verify the signer is a registered participant for this aggregate key */
-    pubkeys_item = wally_map_get(&psbt->inputs[index].musig2_pubkeys,
-                                 agg_pubkey, agg_pubkey_len);
-    if (!pubkeys_item || !pubkeys_item->value ||
-        pubkeys_item->value_len < EC_PUBLIC_KEY_LEN * 2 ||
-        pubkeys_item->value_len % EC_PUBLIC_KEY_LEN)
-        return WALLY_EINVAL;
-    for (i = 0; i < pubkeys_item->value_len; i += EC_PUBLIC_KEY_LEN)
-        if (!memcmp(pubkeys_item->value + i, pubkey33, EC_PUBLIC_KEY_LEN))
-            break;
-    if (i >= pubkeys_item->value_len)
-        return WALLY_EINVAL; /* Signer is not in the participant set */
-
-    /* Nonce reuse prevention: reject if a pubnonce already exists */
-    ret = wally_psbt_input_find_musig2_pubnonce(
-        &psbt->inputs[index],
-        pubkey33, pubkey33_len,
-        agg_pubkey, agg_pubkey_len,
-        leaf_hash, leaf_hash_len,
-        &existing);
-    if (ret != WALLY_OK)
-        return ret;
-    if (existing)
-        return WALLY_ERROR;
-
-    /* Try to compute the sighash to bind the nonce to this transaction.
-     * If the PSBT lacks a complete transaction or UTXO, skip silently. */
-    if (musig2_input_sighash(psbt, index, sighash, sizeof(sighash)) == WALLY_OK) {
-        msg32 = sighash;
-        msg_len = sizeof(sighash);
-    }
-
-    /* Generate the nonce pair */
-    ret = wally_musig_nonce_gen(session_secrand32, session_secrand_len,
-                                seckey, seckey_len,
-                                pubkey33, pubkey33_len,
-                                keyagg_cache,
-                                msg32, msg_len,
-                                NULL, 0,
-                                &secnonce, &pubnonce);
-    if (ret != WALLY_OK)
-        goto done;
-
-    /* Serialize the public nonce to bytes */
-    ret = wally_musig_pubnonce_serialize(pubnonce, pubnonce_bytes, sizeof(pubnonce_bytes));
-    if (ret != WALLY_OK)
-        goto done;
-
-    /* Store the serialized pubnonce in the PSBT */
-    ret = wally_psbt_input_add_musig2_pubnonce(
-        &psbt->inputs[index],
-        pubkey33, pubkey33_len,
-        agg_pubkey, agg_pubkey_len,
-        leaf_hash, leaf_hash_len,
-        pubnonce_bytes, sizeof(pubnonce_bytes));
-    if (ret != WALLY_OK)
-        goto done;
-
-    /* Transfer secnonce ownership to caller */
-    *secnonce_out = secnonce;
-    secnonce = NULL;
-
-done:
-    wally_musig_pubnonce_free(pubnonce);
-    if (secnonce)
-        wally_musig_secnonce_free(secnonce);
-    wally_clear(sighash, sizeof(sighash));
-    return ret;
+    return musig2_add_nonce_internal(
+        psbt, index, session_secrand32, session_secrand_len,
+        seckey, seckey_len, pubkey33, pubkey33_len,
+        agg_pubkey, agg_pubkey, keyagg_cache, NULL, 0,
+        flags, secnonce_out);
 }
 
 /* For a key-path taproot MuSig2 spend the aggregated signature must verify
@@ -8341,9 +8430,9 @@ static int musig2_get_signing_cache(
 }
 
 /* Create a MuSig2 signing session for input `index`: look up the participant
- * list for `agg_pubkey` (verifying that `pubkey33` is a member, if given),
- * collect and aggregate all participant pubnonces, compute the sighash and
- * process the aggregate nonce with it.
+ * list under participants_key (verifying that pubkey33 is a member, if given),
+ * verify the cache against cache_key, and collect pubnonces stored under
+ * composite_agg_key before processing the aggregate nonce and sighash.
  * On success returns the participant list, the collected pubnonces (owned by
  * the caller), the tweaked signing cache from musig2_get_signing_cache (owned
  * by the caller, NULL for the script-path case) and the session (owned by
@@ -8351,7 +8440,9 @@ static int musig2_get_signing_cache(
 static int musig2_session_init(
     struct wally_psbt *psbt, size_t index,
     const unsigned char *pubkey33,
-    const unsigned char *agg_pubkey,
+    const unsigned char *participants_key,
+    const unsigned char *cache_key,
+    const unsigned char *composite_agg_key,
     const unsigned char *leaf_hash,
     const struct wally_musig_keyagg_cache *keyagg_cache,
     const unsigned char **participants_out, size_t *n_participants_out,
@@ -8382,13 +8473,13 @@ static int musig2_session_init(
         unsigned char derived[EC_PUBLIC_KEY_LEN];
         if (wally_musig_pubkey_get(keyagg_cache, derived,
                                    sizeof(derived)) != WALLY_OK ||
-            memcmp(derived, agg_pubkey, sizeof(derived)))
+            memcmp(derived, cache_key, sizeof(derived)))
             return WALLY_EINVAL;
     }
 
     /* Look up the participant pubkeys for this aggregate key */
     pubkeys_item = wally_map_get(&psbt->inputs[index].musig2_pubkeys,
-                                 agg_pubkey, EC_PUBLIC_KEY_LEN);
+                                 participants_key, EC_PUBLIC_KEY_LEN);
     if (!pubkeys_item)
         return WALLY_EINVAL;
     participants = pubkeys_item->value;
@@ -8417,7 +8508,7 @@ static int musig2_session_init(
         const unsigned char *participant_i = participants + i * EC_PUBLIC_KEY_LEN;
         const struct wally_map_item *nonce_item;
 
-        musig2_composite_key_build(participant_i, agg_pubkey, leaf_hash,
+        musig2_composite_key_build(participant_i, composite_agg_key, leaf_hash,
                                    composite_key, &composite_key_len);
         nonce_item = wally_map_get(&psbt->inputs[index].musig2_pubnonces,
                                    composite_key, composite_key_len);
@@ -8469,7 +8560,7 @@ done:
     return ret;
 }
 
-int wally_psbt_musig2_sign(
+static int musig2_sign_internal(
     struct wally_psbt *psbt,
     size_t index,
     struct wally_musig_secnonce *secnonce,
@@ -8477,10 +8568,9 @@ int wally_psbt_musig2_sign(
     size_t seckey_len,
     const unsigned char *pubkey33,
     size_t pubkey33_len,
-    const unsigned char *agg_pubkey,
-    size_t agg_pubkey_len,
-    const unsigned char *leaf_hash,
-    size_t leaf_hash_len,
+    const unsigned char *participants_key,
+    const unsigned char *cache_key,
+    const unsigned char *composite_agg_key,
     const struct wally_musig_keyagg_cache *keyagg_cache,
     uint32_t flags,
     struct wally_musig_partial_sig **partial_sig_out)
@@ -8502,22 +8592,15 @@ int wally_psbt_musig2_sign(
         return WALLY_EINVAL;
     if (!pubkey33 || pubkey33_len != EC_PUBLIC_KEY_LEN)
         return WALLY_EINVAL;
-    if (!agg_pubkey || agg_pubkey_len != EC_PUBLIC_KEY_LEN)
-        return WALLY_EINVAL;
-    if (leaf_hash && leaf_hash_len != SHA256_LEN)
-        return WALLY_EINVAL;
-    if (!leaf_hash && leaf_hash_len != 0)
-        return WALLY_EINVAL;
-    if (leaf_hash)
-        return WALLY_EINVAL; /* Script-path MuSig2 not yet supported (would sign a key-path BIP-341 sighash) */
-    if (!keyagg_cache)
+    if (!participants_key || !cache_key || !composite_agg_key || !keyagg_cache)
         return WALLY_EINVAL;
     if (flags)
         return WALLY_EINVAL;
     if (partial_sig_out)
         *partial_sig_out = NULL;
 
-    ret = musig2_session_init(psbt, index, pubkey33, agg_pubkey, leaf_hash,
+    ret = musig2_session_init(psbt, index, pubkey33,
+                              participants_key, cache_key, composite_agg_key, NULL,
                               keyagg_cache, &participants, &n_participants,
                               &pubnonces_buf, &signing_cache, &session);
     if (ret != WALLY_OK)
@@ -8543,8 +8626,8 @@ int wally_psbt_musig2_sign(
     ret = wally_psbt_input_add_musig2_partial_sig(
         &psbt->inputs[index],
         pubkey33, pubkey33_len,
-        agg_pubkey, agg_pubkey_len,
-        leaf_hash, leaf_hash_len,
+        composite_agg_key, EC_PUBLIC_KEY_LEN,
+        NULL, 0,
         partial_sig_bytes, sizeof(partial_sig_bytes));
     if (ret != WALLY_OK)
         goto done;
@@ -8566,13 +8649,39 @@ done:
     return ret;
 }
 
-int wally_psbt_musig2_finalize_input(
+int wally_psbt_musig2_sign(
     struct wally_psbt *psbt,
     size_t index,
+    struct wally_musig_secnonce *secnonce,
+    const unsigned char *seckey,
+    size_t seckey_len,
+    const unsigned char *pubkey33,
+    size_t pubkey33_len,
     const unsigned char *agg_pubkey,
     size_t agg_pubkey_len,
     const unsigned char *leaf_hash,
     size_t leaf_hash_len,
+    const struct wally_musig_keyagg_cache *keyagg_cache,
+    uint32_t flags,
+    struct wally_musig_partial_sig **partial_sig_out)
+{
+    if (!agg_pubkey || agg_pubkey_len != EC_PUBLIC_KEY_LEN ||
+        (leaf_hash && leaf_hash_len != SHA256_LEN) ||
+        (!leaf_hash && leaf_hash_len) || leaf_hash)
+        return WALLY_EINVAL; /* Script-path MuSig2 is not yet supported */
+    return musig2_sign_internal(psbt, index, secnonce,
+                                seckey, seckey_len,
+                                pubkey33, pubkey33_len,
+                                agg_pubkey, agg_pubkey, agg_pubkey,
+                                keyagg_cache, flags, partial_sig_out);
+}
+
+static int musig2_finalize_input_internal(
+    struct wally_psbt *psbt,
+    size_t index,
+    const unsigned char *participants_key,
+    const unsigned char *cache_key,
+    const unsigned char *composite_agg_key,
     const struct wally_musig_keyagg_cache *keyagg_cache,
     uint32_t flags)
 {
@@ -8580,7 +8689,6 @@ int wally_psbt_musig2_finalize_input(
     size_t composite_key_len;
     unsigned char sig64[EC_SIGNATURE_LEN];
     unsigned char sig65[EC_SIGNATURE_LEN + 1]; /* for non-default sighash */
-    unsigned char tap_sig_key[EC_XONLY_PUBLIC_KEY_LEN + SHA256_LEN]; /* 64-byte leaf sig key */
     unsigned char *pubnonces_buf = NULL;
     unsigned char *partial_sigs_buf = NULL;
     const unsigned char *participants;
@@ -8592,20 +8700,13 @@ int wally_psbt_musig2_finalize_input(
 
     if (!psbt || index >= psbt->num_inputs)
         return WALLY_EINVAL;
-    if (!agg_pubkey || agg_pubkey_len != EC_PUBLIC_KEY_LEN)
-        return WALLY_EINVAL;
-    if (leaf_hash && leaf_hash_len != SHA256_LEN)
-        return WALLY_EINVAL;
-    if (!leaf_hash && leaf_hash_len != 0)
-        return WALLY_EINVAL;
-    if (leaf_hash)
-        return WALLY_EINVAL; /* Script-path MuSig2 not yet supported (would sign a key-path BIP-341 sighash) */
-    if (!keyagg_cache)
+    if (!participants_key || !cache_key || !composite_agg_key || !keyagg_cache)
         return WALLY_EINVAL;
     if (flags)
         return WALLY_EINVAL;
 
-    ret = musig2_session_init(psbt, index, NULL, agg_pubkey, leaf_hash,
+    ret = musig2_session_init(psbt, index, NULL,
+                              participants_key, cache_key, composite_agg_key, NULL,
                               keyagg_cache, &participants, &n_participants,
                               &pubnonces_buf, &signing_cache, &session);
     if (ret != WALLY_OK)
@@ -8624,7 +8725,7 @@ int wally_psbt_musig2_finalize_input(
         const unsigned char *participant_i = participants + i * EC_PUBLIC_KEY_LEN;
         const struct wally_map_item *sig_item;
 
-        musig2_composite_key_build(participant_i, agg_pubkey, leaf_hash,
+        musig2_composite_key_build(participant_i, composite_agg_key, NULL,
                                    composite_key, &composite_key_len);
         sig_item = wally_map_get(&psbt->inputs[index].musig2_partial_sigs,
                                  composite_key, composite_key_len);
@@ -8687,18 +8788,9 @@ int wally_psbt_musig2_finalize_input(
             sig_len = sizeof(sig65);
         }
 
-        if (!leaf_hash) {
-            ret = wally_map_replace_integer(&psbt->inputs[index].psbt_fields,
-                                            PSBT_IN_TAP_KEY_SIG,
-                                            sig_to_store, sig_len);
-        } else {
-            /* taproot_leaf_signatures key is x-only agg_pubkey(32) + leaf_hash(32) */
-            memcpy(tap_sig_key, agg_pubkey + 1, EC_XONLY_PUBLIC_KEY_LEN);
-            memcpy(tap_sig_key + EC_XONLY_PUBLIC_KEY_LEN, leaf_hash, leaf_hash_len);
-            ret = wally_map_replace(&psbt->inputs[index].taproot_leaf_signatures,
-                                    tap_sig_key, sizeof(tap_sig_key),
-                                    sig_to_store, sig_len);
-        }
+        ret = wally_map_replace_integer(&psbt->inputs[index].psbt_fields,
+                                        PSBT_IN_TAP_KEY_SIG,
+                                        sig_to_store, sig_len);
     }
 
     /* Remove nonce and partial sig entries now that aggregation is complete */
@@ -8718,6 +8810,167 @@ done:
     wally_musig_keyagg_cache_free(signing_cache);
     wally_clear(sig64, sizeof(sig64));
     wally_clear(sig65, sizeof(sig65));
+    return ret;
+}
+
+int wally_psbt_musig2_finalize_input(
+    struct wally_psbt *psbt,
+    size_t index,
+    const unsigned char *agg_pubkey,
+    size_t agg_pubkey_len,
+    const unsigned char *leaf_hash,
+    size_t leaf_hash_len,
+    const struct wally_musig_keyagg_cache *keyagg_cache,
+    uint32_t flags)
+{
+    if (!agg_pubkey || agg_pubkey_len != EC_PUBLIC_KEY_LEN ||
+        (leaf_hash && leaf_hash_len != SHA256_LEN) ||
+        (!leaf_hash && leaf_hash_len) || leaf_hash)
+        return WALLY_EINVAL; /* Script-path MuSig2 is not yet supported */
+    return musig2_finalize_input_internal(psbt, index,
+                                          agg_pubkey, agg_pubkey, agg_pubkey,
+                                          keyagg_cache, flags);
+}
+
+/* Return the BIP-328-derived cache and the BIP-341 output key used in the
+ * BIP-373 composite nonce/signature keys for a key-path spend. */
+static int musig2_agg_then_derive_signing_keys(
+    const struct wally_psbt *psbt, size_t index,
+    const unsigned char *agg_pubkey, const uint32_t *path, size_t path_len,
+    struct wally_musig_keyagg_cache **cache_out,
+    unsigned char *derived_agg_out, unsigned char *output_key_out)
+{
+    struct wally_musig_keyagg_cache *cache = NULL, *signing_cache = NULL;
+    int ret;
+
+    *cache_out = NULL;
+    ret = musig2_agg_then_derive_cache(psbt, index, agg_pubkey,
+                                      path, path_len, &cache, derived_agg_out);
+    if (ret == WALLY_OK)
+        ret = musig2_get_signing_cache(psbt, index, cache, NULL,
+                                       &signing_cache);
+    if (ret == WALLY_OK)
+        ret = wally_musig_pubkey_get(signing_cache, output_key_out,
+                                     EC_PUBLIC_KEY_LEN);
+    wally_musig_keyagg_cache_free(signing_cache);
+    if (ret == WALLY_OK) {
+        *cache_out = cache;
+        cache = NULL;
+    }
+    wally_musig_keyagg_cache_free(cache);
+    return ret;
+}
+
+int wally_psbt_musig2_agg_then_derive_add_nonce(
+    struct wally_psbt *psbt,
+    size_t index,
+    const unsigned char *session_secrand32,
+    size_t session_secrand_len,
+    const unsigned char *seckey,
+    size_t seckey_len,
+    const unsigned char *pubkey33,
+    size_t pubkey33_len,
+    const unsigned char *agg_pubkey,
+    size_t agg_pubkey_len,
+    const uint32_t *path,
+    size_t path_len,
+    const unsigned char *msg32,
+    size_t msg32_len,
+    uint32_t flags,
+    struct wally_musig_secnonce **secnonce_out)
+{
+    struct wally_musig_keyagg_cache *cache = NULL;
+    unsigned char derived_agg[EC_PUBLIC_KEY_LEN];
+    unsigned char output_key[EC_PUBLIC_KEY_LEN];
+    int ret;
+
+    if (!agg_pubkey || agg_pubkey_len != EC_PUBLIC_KEY_LEN ||
+        (!path && path_len) || (msg32 && msg32_len != SHA256_LEN) ||
+        (!msg32 && msg32_len) || !secnonce_out)
+        return WALLY_EINVAL;
+    *secnonce_out = NULL;
+    ret = musig2_agg_then_derive_signing_keys(
+        psbt, index, agg_pubkey, path, path_len,
+        &cache, derived_agg, output_key);
+    if (ret == WALLY_OK)
+        ret = musig2_add_nonce_internal(
+            psbt, index, session_secrand32, session_secrand_len,
+            seckey, seckey_len, pubkey33, pubkey33_len,
+            agg_pubkey, output_key, cache, msg32, msg32_len,
+            flags, secnonce_out);
+    wally_musig_keyagg_cache_free(cache);
+    wally_clear_2(derived_agg, sizeof(derived_agg), output_key,
+                  sizeof(output_key));
+    return ret;
+}
+
+int wally_psbt_musig2_agg_then_derive_sign(
+    struct wally_psbt *psbt,
+    size_t index,
+    struct wally_musig_secnonce *secnonce,
+    const unsigned char *seckey,
+    size_t seckey_len,
+    const unsigned char *pubkey33,
+    size_t pubkey33_len,
+    const unsigned char *agg_pubkey,
+    size_t agg_pubkey_len,
+    const uint32_t *path,
+    size_t path_len,
+    uint32_t flags,
+    struct wally_musig_partial_sig **partial_sig_out)
+{
+    struct wally_musig_keyagg_cache *cache = NULL;
+    unsigned char derived_agg[EC_PUBLIC_KEY_LEN];
+    unsigned char output_key[EC_PUBLIC_KEY_LEN];
+    int ret;
+
+    if (!agg_pubkey || agg_pubkey_len != EC_PUBLIC_KEY_LEN ||
+        (!path && path_len))
+        return WALLY_EINVAL;
+    if (partial_sig_out)
+        *partial_sig_out = NULL;
+    ret = musig2_agg_then_derive_signing_keys(
+        psbt, index, agg_pubkey, path, path_len,
+        &cache, derived_agg, output_key);
+    if (ret == WALLY_OK)
+        ret = musig2_sign_internal(psbt, index, secnonce,
+                                   seckey, seckey_len,
+                                   pubkey33, pubkey33_len,
+                                   agg_pubkey, derived_agg, output_key,
+                                   cache, flags, partial_sig_out);
+    wally_musig_keyagg_cache_free(cache);
+    wally_clear_2(derived_agg, sizeof(derived_agg), output_key,
+                  sizeof(output_key));
+    return ret;
+}
+
+int wally_psbt_musig2_agg_then_derive_finalize_input(
+    struct wally_psbt *psbt,
+    size_t index,
+    const unsigned char *agg_pubkey,
+    size_t agg_pubkey_len,
+    const uint32_t *path,
+    size_t path_len,
+    uint32_t flags)
+{
+    struct wally_musig_keyagg_cache *cache = NULL;
+    unsigned char derived_agg[EC_PUBLIC_KEY_LEN];
+    unsigned char output_key[EC_PUBLIC_KEY_LEN];
+    int ret;
+
+    if (!agg_pubkey || agg_pubkey_len != EC_PUBLIC_KEY_LEN ||
+        (!path && path_len))
+        return WALLY_EINVAL;
+    ret = musig2_agg_then_derive_signing_keys(
+        psbt, index, agg_pubkey, path, path_len,
+        &cache, derived_agg, output_key);
+    if (ret == WALLY_OK)
+        ret = musig2_finalize_input_internal(psbt, index,
+                                             agg_pubkey, derived_agg, output_key,
+                                             cache, flags);
+    wally_musig_keyagg_cache_free(cache);
+    wally_clear_2(derived_agg, sizeof(derived_agg), output_key,
+                  sizeof(output_key));
     return ret;
 }
 

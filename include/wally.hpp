@@ -1662,6 +1662,12 @@ inline int psbt_get_locktime(const PSBT& psbt, size_t* written) {
 }
 
 template <class PSBT, class BYTES_OUT>
+inline int psbt_get_sp_musig_session_digest(const PSBT& psbt, BYTES_OUT& bytes_out) {
+    int ret = ::wally_psbt_get_sp_musig_session_digest(detail::get_p(psbt), bytes_out.data(), bytes_out.size());
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT, class BYTES_OUT>
 inline int psbt_get_sp_smallest_outpoint(const PSBT& psbt, BYTES_OUT& bytes_out) {
     int ret = ::wally_psbt_get_sp_smallest_outpoint(detail::get_p(psbt), bytes_out.data(), bytes_out.size());
     return detail::check_ret(__FUNCTION__, ret);
@@ -1972,6 +1978,24 @@ inline int psbt_is_input_finalized(const PSBT& psbt, size_t index, size_t* writt
 template <class PSBT, class SESSION_SECRAND32, class SECKEY, class PUBKEY33, class AGG_PUBKEY, class LEAF_HASH, class KEYAGG_CACHE>
 inline int psbt_musig2_add_nonce(const PSBT& psbt, size_t index, const SESSION_SECRAND32& session_secrand32, const SECKEY& seckey, const PUBKEY33& pubkey33, const AGG_PUBKEY& agg_pubkey, const LEAF_HASH& leaf_hash, const KEYAGG_CACHE& keyagg_cache, uint32_t flags, struct wally_musig_secnonce** secnonce_out) {
     int ret = ::wally_psbt_musig2_add_nonce(detail::get_p(psbt), index, session_secrand32.data(), session_secrand32.size(), seckey.data(), seckey.size(), pubkey33.data(), pubkey33.size(), agg_pubkey.data(), agg_pubkey.size(), leaf_hash.data(), leaf_hash.size(), detail::get_p(keyagg_cache), flags, secnonce_out);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT, class SESSION_SECRAND32, class SECKEY, class PUBKEY33, class AGG_PUBKEY, class PATH, class MSG32>
+inline int psbt_musig2_agg_then_derive_add_nonce(const PSBT& psbt, size_t index, const SESSION_SECRAND32& session_secrand32, const SECKEY& seckey, const PUBKEY33& pubkey33, const AGG_PUBKEY& agg_pubkey, const PATH& path, const MSG32& msg32, uint32_t flags, struct wally_musig_secnonce** secnonce_out) {
+    int ret = ::wally_psbt_musig2_agg_then_derive_add_nonce(detail::get_p(psbt), index, session_secrand32.data(), session_secrand32.size(), seckey.data(), seckey.size(), pubkey33.data(), pubkey33.size(), agg_pubkey.data(), agg_pubkey.size(), path.data(), path.size(), msg32.data(), msg32.size(), flags, secnonce_out);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT, class AGG_PUBKEY, class PATH>
+inline int psbt_musig2_agg_then_derive_finalize_input(const PSBT& psbt, size_t index, const AGG_PUBKEY& agg_pubkey, const PATH& path, uint32_t flags) {
+    int ret = ::wally_psbt_musig2_agg_then_derive_finalize_input(detail::get_p(psbt), index, agg_pubkey.data(), agg_pubkey.size(), path.data(), path.size(), flags);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT, class SECNONCE, class SECKEY, class PUBKEY33, class AGG_PUBKEY, class PATH>
+inline int psbt_musig2_agg_then_derive_sign(const PSBT& psbt, size_t index, const SECNONCE& secnonce, const SECKEY& seckey, const PUBKEY33& pubkey33, const AGG_PUBKEY& agg_pubkey, const PATH& path, uint32_t flags, struct wally_musig_partial_sig** partial_sig_out) {
+    int ret = ::wally_psbt_musig2_agg_then_derive_sign(detail::get_p(psbt), index, detail::get_p(secnonce), seckey.data(), seckey.size(), pubkey33.data(), pubkey33.size(), agg_pubkey.data(), agg_pubkey.size(), path.data(), path.size(), flags, partial_sig_out);
     return detail::check_ret(__FUNCTION__, ret);
 }
 
