@@ -411,6 +411,7 @@ static void destroy_words(PyObject *obj) { (void)obj; }
 %pybuffer_nullable_binary(const unsigned char* script, size_t script_len);
 %pybuffer_nullable_binary(const unsigned char* scriptpubkey, size_t scriptpubkey_len);
 %pybuffer_nullable_binary(const unsigned char* seckey, size_t seckey_len);
+%pybuffer_nullable_binary(const unsigned char* session_digest, size_t digest_len);
 %pybuffer_nullable_binary(const unsigned char* session_secrand32, size_t session_secrand32_len);
 %pybuffer_nullable_binary(const unsigned char* session_secrand32, size_t session_secrand_len);
 %pybuffer_nullable_binary(const unsigned char* share, size_t share_len);
@@ -439,6 +440,7 @@ static void destroy_words(PyObject *obj) { (void)obj; }
 %pybuffer_output_binary(unsigned char* pub_key_out, size_t pub_key_out_len);
 %pybuffer_output_binary(unsigned char* s2c_opening_out, size_t s2c_opening_out_len);
 %pybuffer_output_binary(unsigned char* scalar, size_t scalar_len);
+%pybuffer_output_binary(unsigned char* session_digest_out, size_t digest_len);
 %pybuffer_output_binary(unsigned char* sig64_out, size_t sig64_out_len);
 %pybuffer_output_binary(unsigned char* vbf_out, size_t vbf_out_len);
 %ignore bip32_key_from_base58;
