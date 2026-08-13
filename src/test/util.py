@@ -159,6 +159,8 @@ class wally_psbt_input(Structure):
                 ('sp_ecdh_shares', wally_map),
                 ('sp_dleq_proofs', wally_map),
                 ('sp_spend_keypaths', wally_map),
+                ('sp_partial_ecdh_shares', wally_map),
+                ('sp_partial_dleq_proofs', wally_map),
                 ('issuance_amount', c_uint64),
                 ('inflation_keys', c_uint64),
                 ('pegin_amount', c_uint64),
@@ -167,6 +169,13 @@ class wally_psbt_input(Structure):
                 ('pset_fields', wally_map),
                 ('amount', c_uint64),
                 ('has_amount', c_uint32)]
+
+class wally_sp_musig_input(Structure):
+    _fields_ = [('index', c_size_t),
+                ('pub_keys', c_void_p),
+                ('pub_keys_len', c_size_t),
+                ('path', c_void_p),
+                ('path_len', c_size_t)]
 
 class wally_psbt_output(Structure):
     _fields_ = [('keypaths', wally_map),
