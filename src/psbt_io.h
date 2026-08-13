@@ -142,7 +142,9 @@
 #define PSBT_IN_SP_DLEQ 0x1e
 #define PSBT_IN_SP_SPEND_BIP32_DERIVATION 0x1f
 #define PSBT_IN_SP_TWEAK 0x20
-#define PSBT_IN_MAX PSBT_IN_SP_TWEAK
+#define PSBT_IN_SP_PARTIAL_ECDH_SHARE 0x21
+#define PSBT_IN_SP_PARTIAL_DLEQ 0x22
+#define PSBT_IN_MAX PSBT_IN_SP_PARTIAL_DLEQ
 
 /* Field types >= PSBT_FT_LIMIT have no bit in the uint64_t field masks below:
  * PSBT_FT(k) for k >= 32 aliases PSET_FT(k - 32). Such fields are given a zero
