@@ -850,6 +850,34 @@ static int sp_dleq_verify(const unsigned char *key, size_t key_len,
     return WALLY_OK;
 }
 
+/* Aggregate input SP shares/proofs are keyed by (scan key || participant key) */
+static int sp_partial_key_verify(const unsigned char *key, size_t key_len)
+{
+    if (!key || key_len != EC_PUBLIC_KEY_LEN * 2 ||
+        wally_ec_public_key_verify(key, EC_PUBLIC_KEY_LEN) != WALLY_OK)
+        return WALLY_EINVAL;
+    return wally_ec_public_key_verify(key + EC_PUBLIC_KEY_LEN,
+                                      EC_PUBLIC_KEY_LEN);
+}
+
+static int sp_partial_ecdh_share_verify(const unsigned char *key, size_t key_len,
+                                        const unsigned char *val, size_t val_len)
+{
+    if (sp_partial_key_verify(key, key_len) != WALLY_OK ||
+        val_len != EC_PUBLIC_KEY_LEN)
+        return WALLY_EINVAL;
+    return wally_ec_public_key_verify(val, val_len);
+}
+
+static int sp_partial_dleq_verify(const unsigned char *key, size_t key_len,
+                                  const unsigned char *val, size_t val_len)
+{
+    if (sp_partial_key_verify(key, key_len) != WALLY_OK ||
+        !val || val_len != SP_DLEQ_PROOF_LEN)
+        return WALLY_EINVAL;
+    return WALLY_OK;
+}
+
 static int psbt_output_field_verify(uint32_t field_type,
                                     const unsigned char *val, size_t val_len)
 {
@@ -1139,6 +1167,8 @@ static void psbt_input_init(struct wally_psbt_input *input)
     wally_map_init(0, sp_ecdh_share_verify, &input->sp_ecdh_shares);
     wally_map_init(0, sp_dleq_verify, &input->sp_dleq_proofs);
     wally_map_init(0, wally_keypath_public_key_verify, &input->sp_spend_keypaths);
+    wally_map_init(0, sp_partial_ecdh_share_verify, &input->sp_partial_ecdh_shares);
+    wally_map_init(0, sp_partial_dleq_verify, &input->sp_partial_dleq_proofs);
 #ifdef BUILD_ELEMENTS
     wally_map_init(0, pset_map_input_field_verify, &input->pset_fields);
 #endif /* BUILD_ELEMENTS */
@@ -1165,6 +1195,8 @@ static int psbt_input_free(struct wally_psbt_input *input, bool free_parent)
         wally_map_clear(&input->sp_ecdh_shares);
         wally_map_clear(&input->sp_dleq_proofs);
         wally_map_clear(&input->sp_spend_keypaths);
+        wally_map_clear(&input->sp_partial_ecdh_shares);
+        wally_map_clear(&input->sp_partial_dleq_proofs);
 #ifdef BUILD_ELEMENTS
         wally_tx_free(input->pegin_tx);
         wally_tx_witness_stack_free(input->pegin_witness);
@@ -1313,6 +1345,60 @@ int wally_psbt_set_global_sp_dleq_proof(struct wally_psbt *psbt,
     return wally_map_replace(&psbt->global_sp_dleq_proofs, scan_key,
                              scan_key_len, proof, proof_len);
 }
+
+/* Aggregate input SP shares and proofs are keyed by (scan key || participant key):
+ * one entry per party contributing to an aggregate input key.
+ */
+static int sp_partial_map_add_or_find(const struct wally_map *map_in,
+                                      const unsigned char *scan_key,
+                                      size_t scan_key_len,
+                                      const unsigned char *participant,
+                                      size_t participant_len,
+                                      const unsigned char *value,
+                                      size_t value_len, size_t *written)
+{
+    unsigned char key[EC_PUBLIC_KEY_LEN * 2];
+
+    if (!scan_key || scan_key_len != EC_PUBLIC_KEY_LEN ||
+        !participant || participant_len != EC_PUBLIC_KEY_LEN)
+        return WALLY_EINVAL;
+
+    memcpy(key, scan_key, EC_PUBLIC_KEY_LEN);
+    memcpy(key + EC_PUBLIC_KEY_LEN, participant, EC_PUBLIC_KEY_LEN);
+    if (written)
+        return wally_map_find(map_in, key, sizeof(key), written);
+    return wally_map_replace((struct wally_map *)map_in, key, sizeof(key),
+                             value, value_len);
+}
+
+#define SP_PARTIAL_MAP(NAME, FIELD, VALUE_LEN) \
+    int wally_psbt_input_set_ ## NAME(struct wally_psbt_input *input, \
+                                      const unsigned char *scan_key, \
+                                      size_t scan_key_len, \
+                                      const unsigned char *participant, \
+                                      size_t participant_len, \
+                                      const unsigned char *value, \
+                                      size_t value_len) { \
+        if (!input || !value || value_len != (VALUE_LEN)) return WALLY_EINVAL; \
+        return sp_partial_map_add_or_find(&input->FIELD, scan_key, scan_key_len, \
+                                          participant, participant_len, \
+                                          value, value_len, NULL); \
+    } \
+    int wally_psbt_input_find_ ## NAME(const struct wally_psbt_input *input, \
+                                       const unsigned char *scan_key, \
+                                       size_t scan_key_len, \
+                                       const unsigned char *participant, \
+                                       size_t participant_len, \
+                                       size_t *written) { \
+        if (written) *written = 0; \
+        if (!input) return WALLY_EINVAL; \
+        return sp_partial_map_add_or_find(&input->FIELD, scan_key, scan_key_len, \
+                                          participant, participant_len, \
+                                          NULL, 0, written); \
+    }
+
+SP_PARTIAL_MAP(sp_partial_ecdh_share, sp_partial_ecdh_shares, EC_PUBLIC_KEY_LEN)
+SP_PARTIAL_MAP(sp_partial_dleq_proof, sp_partial_dleq_proofs, SP_DLEQ_PROOF_LEN)
 
 int wally_psbt_output_clear_amount(struct wally_psbt_output *output)
 {
@@ -2958,6 +3044,14 @@ static int pull_psbt_input(const struct wally_psbt *psbt,
                 ret = pull_map_item(cursor, max, key, key_len,
                                     &result->sp_spend_keypaths);
                 break;
+            case PSBT_IN_SP_PARTIAL_ECDH_SHARE:
+                ret = pull_map_item(cursor, max, key, key_len,
+                                    &result->sp_partial_ecdh_shares);
+                break;
+            case PSBT_IN_SP_PARTIAL_DLEQ:
+                ret = pull_map_item(cursor, max, key, key_len,
+                                    &result->sp_partial_dleq_proofs);
+                break;
 #ifdef BUILD_ELEMENTS
             case PSET_FT(PSET_IN_EXPLICIT_VALUE):
                 ret = wally_psbt_input_set_amount(result, pull_le64_subfield(cursor, max));
@@ -3674,6 +3768,8 @@ static int push_psbt_input(const struct wally_psbt *psbt,
     if ((is_pset || psbt->version == PSBT_0) &&
         (input->sp_ecdh_shares.num_items || input->sp_dleq_proofs.num_items ||
          input->sp_spend_keypaths.num_items ||
+         input->sp_partial_ecdh_shares.num_items ||
+         input->sp_partial_dleq_proofs.num_items ||
          wally_map_get_integer(&input->psbt_fields, PSBT_IN_SP_TWEAK)))
         return WALLY_EINVAL;
 
@@ -3817,6 +3913,10 @@ static int push_psbt_input(const struct wally_psbt *psbt,
                                          PSBT_IN_SP_TWEAK,
                                          false, &input->psbt_fields)) != WALLY_OK)
             return ret;
+        push_psbt_map(cursor, max, PSBT_IN_SP_PARTIAL_ECDH_SHARE, false,
+                      &input->sp_partial_ecdh_shares);
+        push_psbt_map(cursor, max, PSBT_IN_SP_PARTIAL_DLEQ, false,
+                      &input->sp_partial_dleq_proofs);
     }
 
 #ifdef BUILD_ELEMENTS
@@ -4315,6 +4415,12 @@ static int combine_input(struct wally_psbt_input *dst,
     if ((ret = wally_map_combine(&dst->sp_dleq_proofs, &src->sp_dleq_proofs)) != WALLY_OK)
         return ret;
     if ((ret = wally_map_combine(&dst->sp_spend_keypaths, &src->sp_spend_keypaths)) != WALLY_OK)
+        return ret;
+    if ((ret = wally_map_combine(&dst->sp_partial_ecdh_shares,
+                                 &src->sp_partial_ecdh_shares)) != WALLY_OK)
+        return ret;
+    if ((ret = wally_map_combine(&dst->sp_partial_dleq_proofs,
+                                 &src->sp_partial_dleq_proofs)) != WALLY_OK)
         return ret;
     if ((ret = combine_map_if_empty(&dst->taproot_leaf_signatures, &src->taproot_leaf_signatures)) != WALLY_OK)
         return ret;
@@ -4840,6 +4946,8 @@ static int psbt_v2_to_v0(struct wally_psbt *psbt)
         if (psbt->inputs[i].sp_ecdh_shares.num_items ||
             psbt->inputs[i].sp_dleq_proofs.num_items ||
             psbt->inputs[i].sp_spend_keypaths.num_items ||
+            psbt->inputs[i].sp_partial_ecdh_shares.num_items ||
+            psbt->inputs[i].sp_partial_dleq_proofs.num_items ||
             wally_map_get_integer(&psbt->inputs[i].psbt_fields,
                                   PSBT_IN_SP_TWEAK))
             return WALLY_EINVAL;
