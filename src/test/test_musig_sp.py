@@ -182,6 +182,34 @@ class MusigSilentPaymentRoundsTests(unittest.TestCase):
         self.assertEqual(psbt.contents.inputs[0].sp_partial_ecdh_shares.num_items, 0)
         wally_psbt_free(psbt)
 
+    def test_round1_rejects_resolved_but_modifiable_psbt(self):
+        psbt = self.build_psbt()
+        musig = self.musig_input()
+        for i, secret in enumerate(self.secret_keys):
+            proof_entropy = bytes([0x19 + i]) * SHA256_LEN
+            key, key_len = make_cbuffer(secret)
+            self.assertEqual(wally_psbt_sp_musig_contribute(
+                psbt, byref(musig), 1, key, key_len, proof_entropy,
+                len(proof_entropy), 0), WALLY_OK)
+        self.assertEqual(wally_psbt_sp_musig_resolve_shares(
+            psbt, byref(musig), 1, 0), WALLY_OK)
+        for modifiable_flags in (1, 2, 3, 4):
+            self.assertEqual(wally_psbt_set_tx_modifiable_flags(
+                psbt, modifiable_flags), WALLY_OK)
+            key, key_len = make_cbuffer(self.secret_keys[0])
+            entropy = b'\x21' * SHA256_LEN + b'\x22' * SHA256_LEN
+            nonce_out = (c_void_p * 1)()
+            digest_out, _ = make_cbuffer('00' * SHA256_LEN)
+            ret, _ = wally_psbt_sp_musig_round1(
+                psbt, byref(musig), 1, key, key_len, entropy, len(entropy), 0,
+                nonce_out, digest_out, SHA256_LEN)
+            self.assertEqual(ret, WALLY_EINVAL)
+            self.assertFalse(nonce_out[0])
+            self.assertEqual(psbt.contents.inputs[0].musig2_pubnonces.num_items, 0)
+            self.assertEqual(psbt.contents.tx_modifiable_flags,
+                             modifiable_flags)
+        wally_psbt_free(psbt)
+
     def test_agg_then_derive_rejects_bad_path_binding(self):
         psbt = self.build_psbt()
         secret, secret_len = make_cbuffer(self.secret_keys[0])

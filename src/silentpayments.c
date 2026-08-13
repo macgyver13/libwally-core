@@ -1862,6 +1862,9 @@ int wally_psbt_sp_musig_round1(
     ret = sp_musig_inputs_verify(psbt, musig_inputs, num_musig_inputs);
     if (ret != WALLY_OK || (ret = sp_sighash_policy(psbt)) != WALLY_OK)
         return ret;
+    if (psbt->tx_modifiable_flags & ~(WALLY_PSBT_TXMOD_INPUTS |
+                                      WALLY_PSBT_TXMOD_OUTPUTS))
+        return WALLY_EINVAL;
 
     /* Front-load every validation that can fail before producing any nonce. */
     for (i = 0; i < num_musig_inputs; ++i) {
@@ -1902,9 +1905,13 @@ int wally_psbt_sp_musig_round1(
         ret = sp_status(staged, musig_inputs, num_musig_inputs, false, &status);
     if (ret == WALLY_OK && status == WALLY_SP_INVALID)
         ret = WALLY_EINVAL;
-    if (ret == WALLY_OK && status == WALLY_SP_COMPLETE)
-        staged->tx_modifiable_flags &= ~(WALLY_PSBT_TXMOD_INPUTS |
-                                          WALLY_PSBT_TXMOD_OUTPUTS);
+    if (ret == WALLY_OK && status == WALLY_SP_COMPLETE) {
+        /* Do not bless scripts that arrived resolved while the transaction
+         * was still mutable. The valid last-contributor path resolves below
+         * on this clone and clears the flags itself. */
+        if (staged->tx_modifiable_flags)
+            ret = WALLY_EINVAL;
+    }
     else if (ret == WALLY_OK && status == WALLY_SP_INCOMPLETE) {
         size_t resolved = WALLY_SP_INVALID;
         int resolve_ret = sp_status(staged, musig_inputs, num_musig_inputs,
