@@ -92,6 +92,76 @@ Silentpayments Functions
    :return: See :ref:`error-codes`
 
 
+.. c:function:: int wally_psbt_sp_musig_contribute(struct wally_psbt *psbt, const struct wally_sp_musig_input *musig_inputs, size_t num_musig_inputs, const unsigned char *priv_keys, size_t priv_keys_len, const unsigned char *entropy, size_t entropy_len, uint32_t flags)
+
+   
+   Contribute this party's partial ECDH shares to a PSBT's aggregate inputs.
+   
+   :param psbt: The PSBT to contribute to. Directly modifies this PSBT.
+   :param musig_inputs: The aggregate inputs to contribute for, in ascending index order without duplicates.
+   :param num_musig_inputs: The number of elements in ``musig_inputs``.
+   :param priv_keys: This party's participant private keys, one `EC_PRIVATE_KEY_LEN` key per element of ``musig_inputs``, in the same order. Each is the party's untweaked account-level secret, *not* a taproot-tweaked key.
+   :param priv_keys_len: Length of ``priv_keys``. Must be ``num_musig_inputs`` * `EC_PRIVATE_KEY_LEN`.
+   :param entropy: Randomness for the DLEQ proofs, as for `wally_psbt_sp_contribute`. Must be unpredictable and must not be reused.
+   :param entropy_len: Length of ``entropy`` in bytes. Must be 32.
+   :param flags: For future use. Must be 0.
+   
+   Stores a ``PSBT_IN_SP_PARTIAL_ECDH_SHARE`` and its
+   ``PSBT_IN_SP_PARTIAL_DLEQ`` proof, keyed by scan key and by this party's
+   participant key, for every unique recipient scan key. No output script is
+   derived: the outputs cannot be derived until every participant of every
+   aggregate input has contributed.
+   
+   The operation is transactional: on failure, ``psbt`` is not modified.
+   
+   .. note:: Each key must be one of its input's participant keys, or `WALLY_EINVAL` is returned: a share proven against a key outside the aggregate would make the transaction unresolvable for everyone.
+
+   :return: See :ref:`error-codes`
+
+
+.. c:function:: int wally_psbt_sp_musig_resolve_shares(struct wally_psbt *psbt, const struct wally_sp_musig_input *musig_inputs, size_t num_musig_inputs, uint32_t flags)
+
+   
+   Resolve a PSBT's silent payment outputs, combining any partial shares.
+   
+   :param psbt: The PSBT to resolve. Directly modifies this PSBT.
+   :param musig_inputs: The inputs whose keys are aggregates, or NULL.
+   :param num_musig_inputs: The number of elements in ``musig_inputs``.
+   :param flags: For future use. Must be 0.
+   
+   As `wally_psbt_sp_resolve_shares`, but additionally combines the partial
+   shares of each named input into that input's ECDH point, so that inputs
+   spent with an aggregate key contribute like any other. Requires no private
+   keys, and is the call every party makes to re-derive and check the outputs
+   before signing.
+   
+   Returns `WALLY_EINVAL` if the aggregate of an input's participant keys and
+   path is not the key that input is spent with, or if any partial share fails
+   its proof. The operation is transactional: on failure, ``psbt`` is not
+   modified.
+
+   :return: See :ref:`error-codes`
+
+
+.. c:function:: int wally_psbt_get_sp_musig_status(const struct wally_psbt *psbt, const struct wally_sp_musig_input *musig_inputs, size_t num_musig_inputs, uint32_t flags, size_t *written)
+
+   
+   Get the status of a PSBT's shares and proofs, including partial ones.
+   
+   :param psbt: The PSBT to check. Not modified.
+   :param musig_inputs: The inputs whose keys are aggregates, or NULL.
+   :param num_musig_inputs: The number of elements in ``musig_inputs``.
+   :param flags: For future use. Must be 0.
+   :param written: `WALLY_SP_INVALID`, `WALLY_SP_INCOMPLETE` or `WALLY_SP_COMPLETE`, as for `wally_psbt_get_sp_status`.
+   
+   As `wally_psbt_get_sp_status`, but a named input is covered only when every
+   one of its participants has contributed a valid partial share. This is how a
+   party tells round 1 - still collecting shares - from round 2, where the
+   outputs are derived and can be checked before signing.
+
+   :return: See :ref:`error-codes`
+
+
 .. c:function:: int wally_psbt_sp_resolve_shares(struct wally_psbt *psbt, uint32_t flags)
 
    

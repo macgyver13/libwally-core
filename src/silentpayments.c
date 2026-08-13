@@ -12,6 +12,9 @@
 #include <stdlib.h>
 
 #ifndef BUILD_STANDARD_SECP
+#include <include/wally_bip32.h>
+#include <include/wally_musig.h>
+
 #include <secp256k1_dleq.h>
 #include <secp256k1_extrakeys.h>
 #include <secp256k1_silentpayments.h>
@@ -26,6 +29,27 @@ static const unsigned char BIP341_NUMS_XONLY[EC_XONLY_PUBLIC_KEY_LEN] = {
     0x50, 0x92, 0x9b, 0x74, 0xc1, 0xa0, 0x49, 0x54, 0xb7, 0x8b, 0x4b, 0x60,
     0x35, 0xe9, 0x7a, 0x5e, 0x07, 0x8a, 0x5a, 0x0f, 0x28, 0xec, 0x96, 0xd5,
     0x47, 0xbf, 0xee, 0x9a, 0xce, 0x80, 0x3a, 0xc0
+};
+
+/* The public factors relating an aggregate input key to its participants.
+ *
+ * Where a single party's silent payment share is x*B_scan, an aggregate key's
+ * is assembled from one share per party. BIP-327 writes the aggregate secret
+ * that a taproot input spends with as
+ *
+ *   a_Q = g_v * (gacc * sum(a_i * x_i) + tacc)
+ *
+ * so multiplying through by B_scan gives the BIP-352 ECDH point in terms of
+ * the per-party shares, using only public values:
+ *
+ *   a_Q*B_scan = (g_v*gacc) * sum(a_i * share_i) + (g_v*tacc) * B_scan
+ *
+ * 'negate' holds g_v*gacc, which is only ever +/-1, and 'tweak' holds
+ * g_v*tacc reduced into a scalar. No party's secret is involved.
+ */
+struct sp_musig_factors {
+    unsigned char tweak[EC_PRIVATE_KEY_LEN]; /* g_v * tacc */
+    bool negate;                             /* g_v * gacc == -1 */
 };
 
 /* A recipient, and the PSBT output index it was read from */
@@ -467,6 +491,158 @@ static bool sp_find_share(const struct wally_map *shares,
            (*proof_out)->value_len == SP_DLEQ_PROOF_LEN;
 }
 
+/* The BIP-327 KeyAgg coefficient a_i of one participant key.
+ *
+ * It weights that party's share in the aggregate, and is a hash of the whole
+ * participant list, so it needs no secret and every signer computes the same
+ * value. The "second" key - the first that differs from the first - takes the
+ * constant 1, which is what stops a single key aggregating to itself.
+ */
+static bool sp_musig_keyagg_coef(const unsigned char *pub_keys,
+                                 size_t num_keys, size_t index,
+                                 unsigned char *bytes_out)
+{
+    unsigned char buff[SHA256_LEN + EC_PUBLIC_KEY_LEN];
+    const unsigned char *first = pub_keys, *pk = pub_keys + index * EC_PUBLIC_KEY_LEN;
+    size_t i;
+
+    for (i = 1; i < num_keys; ++i) {
+        const unsigned char *candidate = pub_keys + i * EC_PUBLIC_KEY_LEN;
+        if (memcmp(candidate, first, EC_PUBLIC_KEY_LEN)) {
+            if (!memcmp(pk, candidate, EC_PUBLIC_KEY_LEN)) {
+                memset(bytes_out, 0, EC_PRIVATE_KEY_LEN);
+                bytes_out[EC_PRIVATE_KEY_LEN - 1] = 1;
+                return true; /* The second key's coefficient is 1 */
+            }
+            break;
+        }
+    }
+
+    if (wally_bip340_tagged_hash(pub_keys, num_keys * EC_PUBLIC_KEY_LEN,
+                                 "KeyAgg list", buff, SHA256_LEN) != WALLY_OK)
+        return false;
+    memcpy(buff + SHA256_LEN, pk, EC_PUBLIC_KEY_LEN);
+    return wally_bip340_tagged_hash(buff, sizeof(buff), "KeyAgg coefficient",
+                                    bytes_out, EC_PRIVATE_KEY_LEN) == WALLY_OK;
+}
+
+/* Accumulate the tweaks between the bare aggregate of 'pub_keys' and the
+ * taproot output key of tr(musig(...)/<path>), and report the resulting
+ * factors along with that output key.
+ *
+ * Two kinds of tweak are applied. The BIP-328 synthetic derivation steps are
+ * plain tweaks, which simply add to tacc. The BIP-341 taproot tweak is an
+ * x-only tweak, so it first negates the accumulators if the key it is applied
+ * to has an odd Y. A final negation accounts for the output key's own parity,
+ * since BIP-352 hashes the even-Y form.
+ */
+static bool sp_musig_derive_factors(const secp256k1_context *ctx,
+                                    const unsigned char *pub_keys,
+                                    size_t num_keys,
+                                    const uint32_t *path, size_t path_len,
+                                    struct sp_musig_factors *factors,
+                                    secp256k1_xonly_pubkey *output_key)
+{
+    unsigned char agg_pk[EC_PUBLIC_KEY_LEN], tweak[EC_PRIVATE_KEY_LEN];
+    unsigned char tap_tweak[SHA256_LEN], hmac[HMAC_SHA512_LEN];
+    struct wally_musig_keyagg_cache *cache = NULL;
+    struct ext_key *xpub = NULL, *child = NULL;
+    secp256k1_pubkey internal, tweaked;
+    bool have_tweak = false, ok = false;
+    size_t i, len = EC_PUBLIC_KEY_LEN;
+    int parity;
+
+    if (wally_musig_pubkey_agg(pub_keys, num_keys * EC_PUBLIC_KEY_LEN,
+                               NULL, 0, &cache) != WALLY_OK)
+        return false;
+    if (wally_musig_pubkey_get(cache, agg_pk, sizeof(agg_pk)) != WALLY_OK ||
+        wally_musig_pubkey_to_xpub(agg_pk, sizeof(agg_pk),
+                                   BIP32_VER_MAIN_PUBLIC, &xpub) != WALLY_OK)
+        goto cleanup;
+
+    /* Each synthetic step tweaks by the BIP-32 IL of the step it takes. wally
+     * derives the key itself; only the scalar has to be recomputed here.
+     */
+    for (i = 0; i < path_len; ++i) {
+        unsigned char data[EC_PUBLIC_KEY_LEN + sizeof(uint32_t)];
+        if (path[i] >= BIP32_INITIAL_HARDENED_CHILD)
+            goto cleanup; /* A public key cannot derive a hardened child */
+        memcpy(data, xpub->pub_key, EC_PUBLIC_KEY_LEN);
+        data[EC_PUBLIC_KEY_LEN] = (unsigned char)(path[i] >> 24);
+        data[EC_PUBLIC_KEY_LEN + 1] = (unsigned char)(path[i] >> 16);
+        data[EC_PUBLIC_KEY_LEN + 2] = (unsigned char)(path[i] >> 8);
+        data[EC_PUBLIC_KEY_LEN + 3] = (unsigned char)path[i];
+        if (wally_hmac_sha512(xpub->chain_code, sizeof(xpub->chain_code),
+                              data, sizeof(data), hmac, sizeof(hmac)) != WALLY_OK)
+            goto cleanup;
+        if (!have_tweak) {
+            memcpy(tweak, hmac, EC_PRIVATE_KEY_LEN);
+            have_tweak = true;
+        } else if (wally_ec_scalar_add_to(tweak, sizeof(tweak), hmac,
+                                          EC_PRIVATE_KEY_LEN) != WALLY_OK)
+            goto cleanup;
+        if (bip32_key_from_parent_alloc(xpub, path[i], BIP32_FLAG_KEY_PUBLIC,
+                                        &child) != WALLY_OK)
+            goto cleanup;
+        bip32_key_free(xpub);
+        xpub = child;
+        child = NULL;
+    }
+    if (!have_tweak)
+        memset(tweak, 0, sizeof(tweak));
+
+    if (!secp256k1_ec_pubkey_parse(ctx, &internal, xpub->pub_key,
+                                   EC_PUBLIC_KEY_LEN))
+        goto cleanup;
+
+    /* The x-only taproot tweak negates the accumulators for an odd-Y key */
+    factors->negate = xpub->pub_key[0] == 0x03;
+    if (factors->negate && have_tweak &&
+        !secp256k1_ec_seckey_negate(ctx, tweak))
+        goto cleanup;
+
+    if (wally_bip340_tagged_hash(xpub->pub_key + 1, EC_XONLY_PUBLIC_KEY_LEN,
+                                 "TapTweak", tap_tweak, sizeof(tap_tweak)) != WALLY_OK)
+        goto cleanup;
+    if (!have_tweak)
+        memcpy(tweak, tap_tweak, sizeof(tweak));
+    else if (wally_ec_scalar_add_to(tweak, sizeof(tweak), tap_tweak,
+                                    sizeof(tap_tweak)) != WALLY_OK)
+        goto cleanup;
+
+    /* Q = lift_x(P) + tap_tweak*G: BIP-341 tweaks the even-Y form of P, which
+     * is what the negation of the accumulators above already accounts for.
+     */
+    tweaked = internal;
+    if ((factors->negate && !secp256k1_ec_pubkey_negate(ctx, &tweaked)) ||
+        !secp256k1_ec_pubkey_tweak_add(ctx, &tweaked, tap_tweak) ||
+        !secp256k1_ec_pubkey_serialize(ctx, agg_pk, &len, &tweaked,
+                                       SECP256K1_EC_COMPRESSED))
+        goto cleanup;
+
+    /* BIP-352 uses the even-Y output key, so an odd-Y Q negates everything */
+    parity = agg_pk[0] == 0x03;
+    if (parity) {
+        factors->negate = !factors->negate;
+        if (!secp256k1_ec_seckey_negate(ctx, tweak))
+            goto cleanup;
+    }
+    if (output_key &&
+        !secp256k1_xonly_pubkey_parse(ctx, output_key, agg_pk + 1))
+        goto cleanup;
+
+    memcpy(factors->tweak, tweak, sizeof(factors->tweak));
+    ok = true;
+
+cleanup:
+    bip32_key_free(child);
+    bip32_key_free(xpub);
+    wally_musig_keyagg_cache_free(cache);
+    wally_clear_3(agg_pk, sizeof(agg_pk), tweak, sizeof(tweak),
+                  hmac, sizeof(hmac));
+    return ok;
+}
+
 /* Verify one BIP-375 share and its proof against the key(s) the share covers */
 static bool sp_verify_share(const secp256k1_context *ctx,
                             const struct wally_map_item *share_item,
@@ -480,6 +656,158 @@ static bool sp_verify_share(const secp256k1_context *ctx,
                                        share_item->value_len) &&
            !!secp256k1_dleq_verify(ctx, proof_item->value, covered_pubkey,
                                    scan_pubkey, &share_pubkey, NULL);
+}
+
+/* Find the aggregate description of an input, or NULL if it has none */
+static const struct wally_sp_musig_input *sp_musig_find(
+    const struct wally_sp_musig_input *musig_inputs, size_t num_musig_inputs,
+    size_t index)
+{
+    size_t i;
+    for (i = 0; i < num_musig_inputs; ++i)
+        if (musig_inputs[i].index == index)
+            return &musig_inputs[i];
+    return NULL;
+}
+
+/* Check the caller's aggregate descriptions before any of them are used */
+static int sp_musig_inputs_verify(const struct wally_psbt *psbt,
+                                  const struct wally_sp_musig_input *musig_inputs,
+                                  size_t num_musig_inputs)
+{
+    size_t i;
+
+    if (!musig_inputs != !num_musig_inputs)
+        return WALLY_EINVAL;
+    for (i = 0; i < num_musig_inputs; ++i) {
+        const struct wally_sp_musig_input *musig = &musig_inputs[i];
+        if (musig->index >= psbt->num_inputs ||
+            (i && musig->index <= musig_inputs[i - 1].index) ||
+            !musig->pub_keys ||
+            musig->pub_keys_len < 2 * EC_PUBLIC_KEY_LEN ||
+            musig->pub_keys_len % EC_PUBLIC_KEY_LEN ||
+            !musig->path != !musig->path_len)
+            return WALLY_EINVAL;
+    }
+    return WALLY_OK;
+}
+
+/* Look up one participant's partial share and proof for a scan key */
+static bool sp_find_partial_share(const struct wally_psbt_input *input,
+                                  const unsigned char *scan_pubkey_bytes,
+                                  const unsigned char *participant,
+                                  const struct wally_map_item **share_out,
+                                  const struct wally_map_item **proof_out)
+{
+    unsigned char key[EC_PUBLIC_KEY_LEN * 2];
+
+    memcpy(key, scan_pubkey_bytes, EC_PUBLIC_KEY_LEN);
+    memcpy(key + EC_PUBLIC_KEY_LEN, participant, EC_PUBLIC_KEY_LEN);
+    *share_out = wally_map_get(&input->sp_partial_ecdh_shares, key, sizeof(key));
+    *proof_out = wally_map_get(&input->sp_partial_dleq_proofs, key, sizeof(key));
+    if (!*share_out && !*proof_out)
+        return true; /* This party has not contributed yet */
+    return *share_out && *proof_out &&
+           (*share_out)->value_len == EC_PUBLIC_KEY_LEN &&
+           (*proof_out)->value_len == SP_DLEQ_PROOF_LEN;
+}
+
+/* Combine an aggregate input's partial shares into the ECDH point that the
+ * input contributes, i.e. a_Q*B_scan, verifying each party's proof on the way.
+ *
+ * Reports through 'covered' whether every participant has contributed; when
+ * one has not, there is nothing to combine yet and the input simply waits on
+ * the remaining parties. Returns false only for what can never become valid:
+ * a share that fails its proof, or an aggregate that is not the key the input
+ * is actually spent with.
+ */
+static bool sp_musig_input_share(const secp256k1_context *ctx,
+                                 const struct wally_psbt *psbt,
+                                 const struct wally_sp_musig_input *musig,
+                                 const secp256k1_pubkey *scan_pubkey,
+                                 const unsigned char *scan_pubkey_bytes,
+                                 secp256k1_pubkey *share_out, bool *covered)
+{
+    const struct wally_psbt_input *input = &psbt->inputs[musig->index];
+    const size_t num_keys = musig->pub_keys_len / EC_PUBLIC_KEY_LEN;
+    const secp256k1_pubkey **ptrs = NULL;
+    secp256k1_pubkey *weighted = NULL, combined, tweaked;
+    secp256k1_xonly_pubkey output_key, input_key;
+    struct sp_musig_factors factors;
+    unsigned char coef[EC_PRIVATE_KEY_LEN];
+    const struct wally_tx_output *utxo = NULL;
+    size_t i, num_shares = 0;
+    bool ok = false;
+
+    *covered = false;
+
+    /* The aggregate must be the key the input is spent with, or the shares
+     * combine to something that pays a script nobody can spend
+     */
+    if (!sp_musig_derive_factors(ctx, musig->pub_keys, num_keys, musig->path,
+                                 musig->path_len, &factors, &output_key))
+        return false;
+    if (wally_psbt_get_input_best_utxo(psbt, musig->index, &utxo) != WALLY_OK ||
+        !utxo || utxo->script_len != WALLY_SCRIPTPUBKEY_P2TR_LEN ||
+        !secp256k1_xonly_pubkey_parse(ctx, &input_key, utxo->script + 2) ||
+        secp256k1_xonly_pubkey_cmp(ctx, &output_key, &input_key))
+        return false;
+
+    weighted = wally_calloc(num_keys * sizeof(*weighted));
+    ptrs = wally_calloc(num_keys * sizeof(*ptrs));
+    if (!weighted || !ptrs)
+        goto cleanup;
+
+    for (i = 0; i < num_keys; ++i) {
+        const unsigned char *participant = musig->pub_keys + i * EC_PUBLIC_KEY_LEN;
+        const struct wally_map_item *share_item, *proof_item;
+        secp256k1_pubkey participant_pubkey;
+
+        if (!sp_find_partial_share(input, scan_pubkey_bytes, participant,
+                                   &share_item, &proof_item))
+            goto cleanup;
+        if (!share_item) {
+            ok = true; /* Waiting on this party, which is not an error */
+            goto cleanup;
+        }
+        if (!secp256k1_ec_pubkey_parse(ctx, &participant_pubkey, participant,
+                                       EC_PUBLIC_KEY_LEN) ||
+            !sp_verify_share(ctx, share_item, proof_item, scan_pubkey,
+                             &participant_pubkey) ||
+            !secp256k1_ec_pubkey_parse(ctx, &weighted[num_shares],
+                                       share_item->value, share_item->value_len))
+            goto cleanup;
+        /* Weight the share by its party's KeyAgg coefficient */
+        if (!sp_musig_keyagg_coef(musig->pub_keys, num_keys, i, coef) ||
+            !secp256k1_ec_pubkey_tweak_mul(ctx, &weighted[num_shares], coef))
+            goto cleanup;
+        ptrs[num_shares] = &weighted[num_shares];
+        ++num_shares;
+    }
+
+    /* sum(a_i * share_i), then the accumulated tweak and parity that take it
+     * from the bare aggregate to the taproot output key the input is spent with
+     */
+    if (!secp256k1_ec_pubkey_combine(ctx, &combined, ptrs, num_shares))
+        goto cleanup;
+    if (factors.negate && !secp256k1_ec_pubkey_negate(ctx, &combined))
+        goto cleanup;
+    tweaked = *scan_pubkey;
+    if (!secp256k1_ec_pubkey_tweak_mul(ctx, &tweaked, factors.tweak))
+        goto cleanup;
+    ptrs[0] = &combined;
+    ptrs[1] = &tweaked;
+    if (!secp256k1_ec_pubkey_combine(ctx, share_out, ptrs, 2))
+        goto cleanup;
+    *covered = ok = true;
+
+cleanup:
+    wally_free(ptrs);
+    if (weighted)
+        wally_clear(weighted, num_keys * sizeof(*weighted));
+    wally_free(weighted);
+    wally_clear_2(coef, sizeof(coef), &factors, sizeof(factors));
+    return ok;
 }
 
 /* BIP-352's input_hash, which ties the outputs to this transaction's inputs:
@@ -750,6 +1078,162 @@ cleanup:
     return ret;
 }
 
+/* Store one party's partial share and proof for a scan key. Unlike a BIP-375
+ * share, this is proven against the party's own participant key rather than
+ * the key the input is spent with: no party holds the latter's secret.
+ */
+static int sp_store_partial_share(struct wally_psbt_input *input,
+                                  const secp256k1_context *ctx,
+                                  const secp256k1_pubkey *scan_pubkey,
+                                  const secp256k1_pubkey *participant_pubkey,
+                                  const unsigned char *scan_pubkey_bytes,
+                                  const unsigned char *participant,
+                                  const unsigned char *priv_key,
+                                  const unsigned char *entropy, size_t proof_index)
+{
+    unsigned char share[EC_PUBLIC_KEY_LEN], proof[SP_DLEQ_PROOF_LEN];
+    unsigned char aux[SHA256_LEN];
+    secp256k1_pubkey share_pubkey = *scan_pubkey;
+    size_t share_len = sizeof(share);
+    int ret = WALLY_ERROR;
+
+    if (sp_proof_entropy(entropy, proof_index, aux) != WALLY_OK)
+        goto cleanup;
+
+    if (!secp256k1_ec_pubkey_tweak_mul(ctx, &share_pubkey, priv_key) ||
+        !secp256k1_ec_pubkey_serialize(ctx, share, &share_len, &share_pubkey,
+                                       SECP256K1_EC_COMPRESSED) ||
+        share_len != sizeof(share) ||
+        !secp256k1_dleq_prove(ctx, proof, priv_key, scan_pubkey, aux, NULL) ||
+        /* Check our own work against the key the other parties will verify
+         * with, as sp_store_input_share() does
+         */
+        !secp256k1_dleq_verify(ctx, proof, participant_pubkey, scan_pubkey,
+                               &share_pubkey, NULL))
+        goto cleanup;
+
+    ret = wally_psbt_input_set_sp_partial_ecdh_share(input, scan_pubkey_bytes,
+                                                     EC_PUBLIC_KEY_LEN,
+                                                     participant, EC_PUBLIC_KEY_LEN,
+                                                     share, sizeof(share));
+    if (ret == WALLY_OK)
+        ret = wally_psbt_input_set_sp_partial_dleq_proof(input, scan_pubkey_bytes,
+                                                         EC_PUBLIC_KEY_LEN,
+                                                         participant, EC_PUBLIC_KEY_LEN,
+                                                         proof, sizeof(proof));
+
+cleanup:
+    wally_clear_3(share, sizeof(share), proof, sizeof(proof), aux, sizeof(aux));
+    return ret;
+}
+
+static int sp_musig_contribute(struct wally_psbt *psbt,
+                               const struct wally_sp_musig_input *musig_inputs,
+                               size_t num_musig_inputs,
+                               const unsigned char *priv_keys,
+                               const unsigned char *entropy)
+{
+    const secp256k1_context *ctx = wally_get_secp_context();
+    struct sp_recipient *recipients = NULL;
+    unsigned char participant[EC_PUBLIC_KEY_LEN];
+    size_t num_recipients = 0, proof_index = 0;
+    size_t i, j, k, is_elements = 0;
+    int ret = WALLY_EINVAL;
+
+    if (psbt->version != WALLY_PSBT_VERSION_2 ||
+        wally_psbt_is_elements(psbt, &is_elements) != WALLY_OK || is_elements)
+        return WALLY_EINVAL;
+
+    recipients = sp_collect_recipients(psbt, &num_recipients, &ret);
+    if (!recipients)
+        return ret == WALLY_OK ? WALLY_EINVAL : ret; /* Nothing to contribute to */
+
+    for (i = 0; i < num_musig_inputs; ++i) {
+        const struct wally_sp_musig_input *musig = &musig_inputs[i];
+        const size_t num_keys = musig->pub_keys_len / EC_PUBLIC_KEY_LEN;
+        const unsigned char *priv_key = priv_keys + i * EC_PRIVATE_KEY_LEN;
+        struct wally_psbt_input *input = &psbt->inputs[musig->index];
+        secp256k1_pubkey participant_pubkey, scan_pubkey;
+        size_t participant_len = sizeof(participant), is_eligible = 0;
+
+        ret = WALLY_EINVAL;
+        if (wally_psbt_get_input_sp_eligible(psbt, musig->index, &is_eligible) != WALLY_OK ||
+            !is_eligible)
+            goto cleanup;
+
+        /* Our key must be one of this input's participants: a share proven
+         * against a key outside the aggregate combines to nothing
+         */
+        if (!secp256k1_ec_pubkey_create(ctx, &participant_pubkey, priv_key) ||
+            !secp256k1_ec_pubkey_serialize(ctx, participant, &participant_len,
+                                           &participant_pubkey,
+                                           SECP256K1_EC_COMPRESSED) ||
+            participant_len != sizeof(participant))
+            goto cleanup;
+        for (k = 0; k < num_keys; ++k)
+            if (!memcmp(participant, musig->pub_keys + k * EC_PUBLIC_KEY_LEN,
+                        EC_PUBLIC_KEY_LEN))
+                break;
+        if (k == num_keys)
+            goto cleanup;
+
+        for (j = 0; j < num_recipients; ++j) {
+            /* One share covers every recipient sharing a scan key */
+            if (j && !memcmp(recipients[j].scan_pubkey, recipients[j - 1].scan_pubkey,
+                             EC_PUBLIC_KEY_LEN))
+                continue;
+            if (!secp256k1_ec_pubkey_parse(ctx, &scan_pubkey,
+                                           recipients[j].scan_pubkey,
+                                           EC_PUBLIC_KEY_LEN))
+                goto cleanup;
+            ret = sp_store_partial_share(input, ctx, &scan_pubkey,
+                                         &participant_pubkey,
+                                         recipients[j].scan_pubkey, participant,
+                                         priv_key, entropy, proof_index++);
+            if (ret != WALLY_OK)
+                goto cleanup;
+        }
+    }
+    ret = WALLY_OK;
+
+cleanup:
+    wally_free(recipients);
+    return ret;
+}
+
+int wally_psbt_sp_musig_contribute(struct wally_psbt *psbt,
+                                   const struct wally_sp_musig_input *musig_inputs,
+                                   size_t num_musig_inputs,
+                                   const unsigned char *priv_keys, size_t priv_keys_len,
+                                   const unsigned char *entropy, size_t entropy_len,
+                                   uint32_t flags)
+{
+    struct wally_psbt *staged = NULL;
+    struct wally_psbt old;
+    int ret;
+
+    if (!psbt || !psbt->num_inputs || !musig_inputs || !num_musig_inputs ||
+        !priv_keys || priv_keys_len != num_musig_inputs * EC_PRIVATE_KEY_LEN ||
+        !entropy || entropy_len != SHA256_LEN || flags)
+        return WALLY_EINVAL;
+    ret = sp_musig_inputs_verify(psbt, musig_inputs, num_musig_inputs);
+    if (ret != WALLY_OK)
+        return ret;
+
+    ret = wally_psbt_clone_alloc(psbt, 0, &staged);
+    if (ret != WALLY_OK)
+        return ret;
+    ret = sp_musig_contribute(staged, musig_inputs, num_musig_inputs,
+                              priv_keys, entropy);
+    if (ret == WALLY_OK) {
+        old = *psbt;
+        *psbt = *staged;
+        *staged = old;
+    }
+    wally_psbt_free(staged);
+    return ret;
+}
+
 int wally_psbt_sp_contribute(struct wally_psbt *psbt,
                              const uint32_t *indices, size_t num_indices,
                              const unsigned char *priv_keys, size_t priv_keys_len,
@@ -984,7 +1468,10 @@ int wally_psbt_sp_resolve(struct wally_psbt *psbt,
  *
  * NOTE: the arguments are validated by the callers.
  */
-static int sp_status(struct wally_psbt *psbt, bool resolve, size_t *written)
+static int sp_status(struct wally_psbt *psbt,
+                     const struct wally_sp_musig_input *musig_inputs,
+                     size_t num_musig_inputs,
+                     bool resolve, size_t *written)
 {
     const secp256k1_context *ctx = wally_get_secp_context();
     struct sp_recipient *recipients = NULL;
@@ -1078,6 +1565,29 @@ static int sp_status(struct wally_psbt *psbt, bool resolve, size_t *written)
         /* Otherwise every eligible input must carry its own share and proof */
         for (j = 0; j < num_keys; ++j) {
             const struct wally_psbt_input *input = &psbt->inputs[eligible[j]];
+            const struct wally_sp_musig_input *musig;
+
+            /* An aggregate input's share is assembled from its participants'
+             * partial shares rather than carried whole
+             */
+            musig = sp_musig_find(musig_inputs, num_musig_inputs, eligible[j]);
+            if (musig) {
+                secp256k1_pubkey musig_share;
+                bool musig_covered = false;
+                if (!sp_musig_input_share(ctx, psbt, musig, &scan_pubkey,
+                                          recipients[i].scan_pubkey,
+                                          &musig_share, &musig_covered))
+                    goto invalid;
+                if (!musig_covered) {
+                    if (!found_global)
+                        group_covered = false; /* Waiting on its participants */
+                    continue;
+                }
+                if (!found_global)
+                    share_pubkeys[num_group_shares++] = musig_share;
+                continue;
+            }
+
             if (!sp_find_share(&input->sp_ecdh_shares, &input->sp_dleq_proofs,
                                recipients[i].scan_pubkey, &share_item, &proof_item))
                 goto invalid;
@@ -1177,23 +1687,26 @@ int wally_psbt_get_sp_status(const struct wally_psbt *psbt, uint32_t flags,
     if (!psbt || !psbt->num_inputs || !written || flags)
         return WALLY_EINVAL;
     /* Checking stores nothing, so the cast away from const is not observable */
-    return sp_status((struct wally_psbt *)psbt, false, written);
+    return sp_status((struct wally_psbt *)psbt, NULL, 0, false, written);
 }
 
-int wally_psbt_sp_resolve_shares(struct wally_psbt *psbt, uint32_t flags)
+/* Resolve into a clone, and adopt it only if that succeeds, so that a failed
+ * resolve - which is how a signer rejects what it is asked to sign - cannot
+ * leave the caller's psbt half-derived.
+ */
+static int sp_resolve_shares(struct wally_psbt *psbt,
+                             const struct wally_sp_musig_input *musig_inputs,
+                             size_t num_musig_inputs)
 {
     struct wally_psbt *staged = NULL;
     struct wally_psbt old;
     size_t status = WALLY_SP_INVALID;
     int ret;
 
-    if (!psbt || !psbt->num_inputs || flags)
-        return WALLY_EINVAL;
-
     ret = wally_psbt_clone_alloc(psbt, 0, &staged);
     if (ret != WALLY_OK)
         return ret;
-    ret = sp_status(staged, true, &status);
+    ret = sp_status(staged, musig_inputs, num_musig_inputs, true, &status);
     if (ret == WALLY_OK) {
         old = *psbt;
         *psbt = *staged;
@@ -1201,6 +1714,46 @@ int wally_psbt_sp_resolve_shares(struct wally_psbt *psbt, uint32_t flags)
     }
     wally_psbt_free(staged);
     return ret;
+}
+
+int wally_psbt_sp_resolve_shares(struct wally_psbt *psbt, uint32_t flags)
+{
+    if (!psbt || !psbt->num_inputs || flags)
+        return WALLY_EINVAL;
+    return sp_resolve_shares(psbt, NULL, 0);
+}
+
+int wally_psbt_get_sp_musig_status(const struct wally_psbt *psbt,
+                                   const struct wally_sp_musig_input *musig_inputs,
+                                   size_t num_musig_inputs, uint32_t flags,
+                                   size_t *written)
+{
+    int ret;
+
+    if (written)
+        *written = WALLY_SP_INVALID;
+    if (!psbt || !psbt->num_inputs || !written || flags)
+        return WALLY_EINVAL;
+    ret = sp_musig_inputs_verify(psbt, musig_inputs, num_musig_inputs);
+    if (ret != WALLY_OK)
+        return ret;
+    /* Checking stores nothing, so the cast away from const is not observable */
+    return sp_status((struct wally_psbt *)psbt, musig_inputs, num_musig_inputs,
+                     false, written);
+}
+
+int wally_psbt_sp_musig_resolve_shares(struct wally_psbt *psbt,
+                                       const struct wally_sp_musig_input *musig_inputs,
+                                       size_t num_musig_inputs, uint32_t flags)
+{
+    int ret;
+
+    if (!psbt || !psbt->num_inputs || flags)
+        return WALLY_EINVAL;
+    ret = sp_musig_inputs_verify(psbt, musig_inputs, num_musig_inputs);
+    if (ret != WALLY_OK)
+        return ret;
+    return sp_resolve_shares(psbt, musig_inputs, num_musig_inputs);
 }
 
 #endif /* ndef BUILD_STANDARD_SECP */
