@@ -1673,6 +1673,12 @@ inline int psbt_get_locktime(const PSBT& psbt, size_t* written) {
     return detail::check_ret(__FUNCTION__, ret);
 }
 
+template <class PSBT, class BYTES_OUT>
+inline int psbt_get_sp_musig_session_digest(const PSBT& psbt, BYTES_OUT& bytes_out) {
+    int ret = ::wally_psbt_get_sp_musig_session_digest(detail::get_p(psbt), bytes_out.data(), bytes_out.size());
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
 template <class PSBT, class MUSIG_INPUTS>
 inline int psbt_get_sp_musig_status(const PSBT& psbt, const MUSIG_INPUTS& musig_inputs, size_t num_musig_inputs, uint32_t flags, size_t* written) {
     int ret = ::wally_psbt_get_sp_musig_status(detail::get_p(psbt), detail::get_p(musig_inputs), num_musig_inputs, flags, written);
@@ -2011,6 +2017,24 @@ inline int psbt_musig2_add_nonce(const PSBT& psbt, size_t index, const SESSION_S
     return detail::check_ret(__FUNCTION__, ret);
 }
 
+template <class PSBT, class SESSION_SECRAND32, class SECKEY, class PUBKEY33, class AGG_PUBKEY, class PATH, class MSG32>
+inline int psbt_musig2_agg_then_derive_add_nonce(const PSBT& psbt, size_t index, const SESSION_SECRAND32& session_secrand32, const SECKEY& seckey, const PUBKEY33& pubkey33, const AGG_PUBKEY& agg_pubkey, const PATH& path, const MSG32& msg32, uint32_t flags, struct wally_musig_secnonce** secnonce_out) {
+    int ret = ::wally_psbt_musig2_agg_then_derive_add_nonce(detail::get_p(psbt), index, session_secrand32.data(), session_secrand32.size(), seckey.data(), seckey.size(), pubkey33.data(), pubkey33.size(), agg_pubkey.data(), agg_pubkey.size(), path.data(), path.size(), msg32.data(), msg32.size(), flags, secnonce_out);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT, class AGG_PUBKEY, class PATH>
+inline int psbt_musig2_agg_then_derive_finalize_input(const PSBT& psbt, size_t index, const AGG_PUBKEY& agg_pubkey, const PATH& path, uint32_t flags) {
+    int ret = ::wally_psbt_musig2_agg_then_derive_finalize_input(detail::get_p(psbt), index, agg_pubkey.data(), agg_pubkey.size(), path.data(), path.size(), flags);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT, class SECNONCE, class SECKEY, class PUBKEY33, class AGG_PUBKEY, class PATH>
+inline int psbt_musig2_agg_then_derive_sign(const PSBT& psbt, size_t index, const SECNONCE& secnonce, const SECKEY& seckey, const PUBKEY33& pubkey33, const AGG_PUBKEY& agg_pubkey, const PATH& path, uint32_t flags, struct wally_musig_partial_sig** partial_sig_out) {
+    int ret = ::wally_psbt_musig2_agg_then_derive_sign(detail::get_p(psbt), index, detail::get_p(secnonce), seckey.data(), seckey.size(), pubkey33.data(), pubkey33.size(), agg_pubkey.data(), agg_pubkey.size(), path.data(), path.size(), flags, partial_sig_out);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
 template <class PSBT, class AGG_PUBKEY, class LEAF_HASH, class KEYAGG_CACHE>
 inline int psbt_musig2_finalize_input(const PSBT& psbt, size_t index, const AGG_PUBKEY& agg_pubkey, const LEAF_HASH& leaf_hash, const KEYAGG_CACHE& keyagg_cache, uint32_t flags) {
     int ret = ::wally_psbt_musig2_finalize_input(detail::get_p(psbt), index, agg_pubkey.data(), agg_pubkey.size(), leaf_hash.data(), leaf_hash.size(), detail::get_p(keyagg_cache), flags);
@@ -2210,6 +2234,18 @@ inline int psbt_sp_musig_contribute(const PSBT& psbt, const MUSIG_INPUTS& musig_
 template <class PSBT, class MUSIG_INPUTS>
 inline int psbt_sp_musig_resolve_shares(const PSBT& psbt, const MUSIG_INPUTS& musig_inputs, size_t num_musig_inputs, uint32_t flags) {
     int ret = ::wally_psbt_sp_musig_resolve_shares(detail::get_p(psbt), detail::get_p(musig_inputs), num_musig_inputs, flags);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT, class MUSIG_INPUTS, class PRIV_KEYS, class ENTROPY, class SESSION_DIGEST_OUT>
+inline int psbt_sp_musig_round1(const PSBT& psbt, const MUSIG_INPUTS& musig_inputs, size_t num_musig_inputs, const PRIV_KEYS& priv_keys, const ENTROPY& entropy, uint32_t flags, struct wally_musig_secnonce** secnonces_out, SESSION_DIGEST_OUT& session_digest_out, size_t* status_out) {
+    int ret = ::wally_psbt_sp_musig_round1(detail::get_p(psbt), detail::get_p(musig_inputs), num_musig_inputs, priv_keys.data(), priv_keys.size(), entropy.data(), entropy.size(), flags, secnonces_out, session_digest_out.data(), session_digest_out.size(), status_out);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT, class MUSIG_INPUTS, class PRIV_KEYS, class SESSION_DIGEST>
+inline int psbt_sp_musig_round2(const PSBT& psbt, const MUSIG_INPUTS& musig_inputs, size_t num_musig_inputs, const PRIV_KEYS& priv_keys, struct wally_musig_secnonce** secnonces, const SESSION_DIGEST& session_digest, uint32_t flags) {
+    int ret = ::wally_psbt_sp_musig_round2(detail::get_p(psbt), detail::get_p(musig_inputs), num_musig_inputs, priv_keys.data(), priv_keys.size(), secnonces, session_digest.data(), session_digest.size(), flags);
     return detail::check_ret(__FUNCTION__, ret);
 }
 
