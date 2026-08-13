@@ -78,10 +78,10 @@ WALLY_CORE_API int wally_psbt_get_sp_smallest_outpoint(
  *
  * The operation is transactional: on failure, ``psbt`` is not modified.
  *
- * .. note:: Only the BIP-375 *global* share is produced, which covers the sum
- *|    of every eligible input, so the caller must hold every eligible input's
- *|    key. Collaborative sending, where signers publish per-input shares, is
- *|    not supported.
+ * .. note:: This produces the BIP-375 *global* share, which covers the sum of
+ *|    every eligible input, so the caller must hold every eligible input's key.
+ *|    For collaborative sending, where each signer holds only some of the
+ *|    inputs, see `wally_psbt_sp_contribute` and `wally_psbt_sp_resolve_shares`.
  *
  * .. note:: The caller is responsible for BIP-352's requirement that the
  *|    inputs it signs use SIGHASH_ALL, and for refusing to sign if the
@@ -93,6 +93,77 @@ WALLY_CORE_API int wally_psbt_sp_resolve(
     size_t priv_keys_len,
     const unsigned char *entropy,
     size_t entropy_len,
+    uint32_t flags);
+
+/**
+ * Contribute BIP-375 per-input ECDH shares to a PSBT, as one of several senders.
+ *
+ * :param psbt: The PSBT to contribute to. Directly modifies this PSBT.
+ * :param indices: The zero-based indices of the inputs to contribute for, in
+ *|    ascending order without duplicates. Every one must be eligible per
+ *|    `wally_psbt_get_input_sp_eligible`.
+ * :param num_indices: The number of elements in ``indices``.
+ * :param priv_keys: The private keys of the inputs named by ``indices``, in the
+ *|    same order, one `EC_PRIVATE_KEY_LEN` key each. For a taproot input this
+ *|    must be the key of the taproot *output* key, i.e. the BIP-341 tweaked
+ *|    key, not the untweaked internal key.
+ * :param priv_keys_len: Length of ``priv_keys`` in bytes. Must be
+ *|    ``num_indices`` * `EC_PRIVATE_KEY_LEN`.
+ * :param entropy: Randomness for the DLEQ proofs. One proof is created per
+ *|    input per unique recipient scan key, each using entropy derived from this
+ *|    value, so it must be unpredictable and must not be reused.
+ * :param entropy_len: Length of ``entropy`` in bytes. Must be 32.
+ * :param flags: For future use. Must be 0.
+ *
+ * For each named input, stores a ``PSBT_IN_SP_ECDH_SHARE`` and its
+ * ``PSBT_IN_SP_DLEQ`` proof for every unique recipient scan key, replacing any
+ * already present for that input and scan key. No output script is derived and
+ * no private key is revealed: the outputs cannot be derived until every
+ * eligible input carries a share, at which point any party can call
+ * `wally_psbt_sp_resolve_shares`.
+ *
+ * The operation is transactional: on failure, ``psbt`` is not modified.
+ *
+ * .. note:: Each key must match the public key its input is spent with, or
+ *|    `WALLY_EINVAL` is returned: a share proven against the wrong key would
+ *|    make the transaction unresolvable for everyone.
+ *
+ * .. note:: A signer holding every eligible input should call
+ *|    `wally_psbt_sp_resolve` instead, which produces a single global share.
+ */
+WALLY_CORE_API int wally_psbt_sp_contribute(
+    struct wally_psbt *psbt,
+    const uint32_t *indices,
+    size_t num_indices,
+    const unsigned char *priv_keys,
+    size_t priv_keys_len,
+    const unsigned char *entropy,
+    size_t entropy_len,
+    uint32_t flags);
+
+/**
+ * Resolve a PSBT's silent payment outputs from the shares it already carries.
+ *
+ * :param psbt: The PSBT to resolve. Directly modifies this PSBT.
+ * :param flags: For future use. Must be 0.
+ *
+ * Derives each silent payment output's scriptPubKey from the BIP-375 shares
+ * present, and stores it. An existing script must match the derived script or
+ * the operation fails, as it does in `wally_psbt_sp_resolve`.
+ *
+ * Requires no private keys: the shares are DLEQ-proven against the inputs'
+ * public keys, and BIP-352 needs nothing beyond the share, the transaction's
+ * smallest outpoint and the recipient's spend key to reach the output. This is
+ * the final step of a collaborative send, and may be performed by any party.
+ *
+ * Returns `WALLY_EINVAL` unless the shares present are valid and cover every
+ * eligible input for every recipient scan key, i.e. unless
+ * `wally_psbt_get_sp_status` reports `WALLY_SP_INCOMPLETE` only for want of the
+ * output scripts. The operation is transactional: on failure, ``psbt`` is not
+ * modified.
+ */
+WALLY_CORE_API int wally_psbt_sp_resolve_shares(
+    struct wally_psbt *psbt,
     uint32_t flags);
 
 /**

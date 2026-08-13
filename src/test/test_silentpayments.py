@@ -427,6 +427,175 @@ class SilentPaymentsTests(unittest.TestCase):
         self.assertEqual(scripts[0], scripts[1])
         self.assertNotEqual(proofs[0], proofs[1])
 
+    def contribute(self, psbt, indices, keys_hex, entropy_hex=ENTROPY):
+        """Contribute per-input shares for `indices`, as one of several senders."""
+        idx = (c_uint32 * len(indices))(*indices)
+        keys, keys_len = make_cbuffer(keys_hex)
+        entropy, entropy_len = make_cbuffer(entropy_hex)
+        return wally_psbt_sp_contribute(psbt, idx, len(indices), keys, keys_len,
+                                        entropy, entropy_len, 0)
+
+    def two_signer_cases(self):
+        """The BIP-352 sending vectors with exactly two eligible inputs."""
+        for case in BIP352_JSON:
+            for sending in case['sending']:
+                given, expected = sending['given'], sending['expected']
+                if len(given['vin']) != 2 or not expected['input_pub_keys'] or \
+                   'input_private_key_sum' not in expected:
+                    continue
+                psbt = self.build_psbt(given['vin'], given['recipients'])
+                keys = [self.eligible_keys(psbt, given['vin'][:1]),
+                        self.eligible_keys(psbt, given['vin'][1:])]
+                wally_psbt_free(psbt)
+                # Both inputs must be eligible for there to be two signers
+                if all(len(k) == 64 for k in keys):
+                    yield case['comment'], given, keys
+
+    def test_contribute_round_trip(self):
+        """Test that two signers contributing shares reach the same outputs"""
+        entropy, entropy_len = make_cbuffer(ENTROPY)
+        tested = 0
+
+        for comment, given, keys in self.two_signer_cases():
+            num_outputs = len(given['recipients'])
+
+            # What one signer holding both inputs would produce, via a global share
+            expected = self.build_psbt(given['vin'], given['recipients'])
+            both, both_len = make_cbuffer(keys[0] + keys[1])
+            self.assertEqual(wally_psbt_sp_resolve(expected, both, both_len,
+                                                   entropy, entropy_len, 0), WALLY_OK)
+            expected_scripts = self.output_scripts(expected, num_outputs)
+            wally_psbt_free(expected)
+
+            # The first signer contributes for its input alone. That resolves
+            # nothing: the outputs are unknown until the second signer adds its
+            # share, which is what stops either of them signing early.
+            psbt = self.build_psbt(given['vin'], given['recipients'])
+            self.assertEqual(self.contribute(psbt, [0], keys[0]), WALLY_OK, comment)
+            self.assertEqual(wally_psbt_get_sp_status(psbt, 0),
+                             (WALLY_OK, WALLY_SP_INCOMPLETE), comment)
+            for i in range(num_outputs):
+                self.assertEqual(wally_psbt_get_output_script_len(psbt, i),
+                                 (WALLY_OK, 0), comment)
+            self.assertEqual(wally_psbt_sp_resolve_shares(psbt, 0), WALLY_EINVAL, comment)
+
+            # The second signer completes the coverage, and can now resolve
+            self.assertEqual(self.contribute(psbt, [1], keys[1], '11' * 32), WALLY_OK, comment)
+            self.assertEqual(wally_psbt_get_sp_status(psbt, 0),
+                             (WALLY_OK, WALLY_SP_INCOMPLETE), comment)
+            self.assertEqual(wally_psbt_sp_resolve_shares(psbt, 0), WALLY_OK, comment)
+            self.assertEqual(wally_psbt_get_sp_status(psbt, 0),
+                             (WALLY_OK, WALLY_SP_COMPLETE), comment)
+            self.assertEqual(self.output_scripts(psbt, num_outputs),
+                             expected_scripts, comment)
+            wally_psbt_free(psbt)
+            tested += 1
+
+        self.assertGreater(tested, 10)
+
+    def test_contribute_both_inputs(self):
+        """Test that per-input shares from one signer resolve as a global would"""
+        entropy, entropy_len = make_cbuffer(ENTROPY)
+
+        for comment, given, keys in self.two_signer_cases():
+            num_outputs = len(given['recipients'])
+            expected = self.build_psbt(given['vin'], given['recipients'])
+            both, both_len = make_cbuffer(keys[0] + keys[1])
+            self.assertEqual(wally_psbt_sp_resolve(expected, both, both_len,
+                                                   entropy, entropy_len, 0), WALLY_OK)
+            expected_scripts = self.output_scripts(expected, num_outputs)
+            wally_psbt_free(expected)
+
+            psbt = self.build_psbt(given['vin'], given['recipients'])
+            self.assertEqual(self.contribute(psbt, [0, 1], keys[0] + keys[1]),
+                             WALLY_OK, comment)
+            self.assertEqual(wally_psbt_sp_resolve_shares(psbt, 0), WALLY_OK, comment)
+            self.assertEqual(self.output_scripts(psbt, num_outputs),
+                             expected_scripts, comment)
+            wally_psbt_free(psbt)
+
+    def test_contribute_wrong_key(self):
+        """Test that a key must match the input it is contributed for"""
+        comment, given, keys = next(iter(self.two_signer_cases()))
+
+        # Swapping the keys proves each share against the wrong input, which
+        # would leave the payment unresolvable for every other signer
+        psbt = self.build_psbt(given['vin'], given['recipients'])
+        self.assertEqual(self.contribute(psbt, [0], keys[1]), WALLY_EINVAL, comment)
+        self.assertEqual(self.contribute(psbt, [0, 1], keys[1] + keys[0]),
+                         WALLY_EINVAL, comment)
+        # The failures are transactional: nothing was stored
+        self.assertEqual(psbt.contents.inputs[0].sp_ecdh_shares.num_items, 0)
+        self.assertEqual(psbt.contents.inputs[0].sp_dleq_proofs.num_items, 0)
+        self.assertEqual(wally_psbt_get_sp_status(psbt, 0),
+                         (WALLY_OK, WALLY_SP_INCOMPLETE))
+        wally_psbt_free(psbt)
+
+    def test_contribute_alongside_global(self):
+        """Test that a global share stands whatever per-input shares accompany it"""
+        comment, given, keys = next(iter(self.two_signer_cases()))
+        entropy, entropy_len = make_cbuffer(ENTROPY)
+        num_outputs = len(given['recipients'])
+
+        psbt = self.build_psbt(given['vin'], given['recipients'])
+        both, both_len = make_cbuffer(keys[0] + keys[1])
+        self.assertEqual(wally_psbt_sp_resolve(psbt, both, both_len,
+                                               entropy, entropy_len, 0), WALLY_OK)
+        expected_scripts = self.output_scripts(psbt, num_outputs)
+
+        # A global share already covers every input, so a per-input share added
+        # afterwards is redundant - but it must still verify, and must not
+        # change the outputs the global share already determined.
+        self.assertEqual(self.contribute(psbt, [0], keys[0]), WALLY_OK, comment)
+        self.assertEqual(wally_psbt_get_sp_status(psbt, 0),
+                         (WALLY_OK, WALLY_SP_COMPLETE), comment)
+        self.assertEqual(self.output_scripts(psbt, num_outputs), expected_scripts)
+        wally_psbt_free(psbt)
+
+    def test_contribute_invalid(self):
+        """Test the invalid arguments of wally_psbt_sp_contribute"""
+        comment, given, keys = next(iter(self.two_signer_cases()))
+        psbt = self.build_psbt(given['vin'], given['recipients'])
+        idx = (c_uint32 * 2)(0, 1)
+        both, both_len = make_cbuffer(keys[0] + keys[1])
+        entropy, entropy_len = make_cbuffer(ENTROPY)
+        args = [psbt, idx, 2, both, both_len, entropy, entropy_len, 0]
+
+        for i, invalid in [(0, None),           # NULL psbt
+                           (1, None),           # NULL indices
+                           (2, 0),              # No indices
+                           (3, None),           # NULL keys
+                           (4, both_len - 1),   # Wrong key length for the indices
+                           (4, both_len + 32),
+                           (5, None),           # NULL entropy
+                           (6, entropy_len - 1),# Wrong entropy length
+                           (7, 1)]:             # Unsupported flags
+            invalid_args = args[:i] + [invalid] + args[i + 1:]
+            self.assertEqual(wally_psbt_sp_contribute(*invalid_args), WALLY_EINVAL)
+
+        # Out of range, descending and duplicate indices
+        for indices in [(0, 2), (1, 0), (0, 0)]:
+            bad = (c_uint32 * 2)(*indices)
+            self.assertEqual(wally_psbt_sp_contribute(psbt, bad, 2, both, both_len,
+                                                      entropy, entropy_len, 0),
+                             WALLY_EINVAL, comment)
+
+        # Nothing above stored anything, so the PSBT is still untouched
+        self.assertEqual(wally_psbt_get_sp_status(psbt, 0),
+                         (WALLY_OK, WALLY_SP_INCOMPLETE))
+        self.assertEqual(wally_psbt_sp_resolve_shares(psbt, 0), WALLY_EINVAL)
+        for i in [None, psbt]:
+            self.assertEqual(wally_psbt_sp_resolve_shares(i, 1), WALLY_EINVAL)
+        wally_psbt_free(psbt)
+
+    def test_contribute_ineligible_input(self):
+        """Test that shares cannot be contributed for an ineligible input"""
+        # A P2PK input cannot contribute to a silent payment
+        p2pk = '21' + '02' + '11' * 32 + 'ac'
+        psbt = self.make_psbt(['0014' + '11' * 20, p2pk])
+        self.assertEqual(self.contribute(psbt, [1], '11' * 32), WALLY_EINVAL)
+        wally_psbt_free(psbt)
+
 
 if __name__ == '__main__':
     unittest.main()
