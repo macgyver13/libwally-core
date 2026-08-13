@@ -104,6 +104,11 @@ struct wally_psbt_input {
     struct wally_map sp_ecdh_shares; /* BIP375 shares keyed by scan public key */
     struct wally_map sp_dleq_proofs; /* BIP375 proofs keyed by scan public key */
     struct wally_map sp_spend_keypaths; /* BIP376 spend key derivation paths */
+    /* Aggregate Input SP: one share/proof per participant in an aggregate key,
+     * keyed by (scan public key || participant public key).
+     */
+    struct wally_map sp_partial_ecdh_shares;
+    struct wally_map sp_partial_dleq_proofs;
 #ifndef WALLY_ABI_NO_ELEMENTS
     uint64_t issuance_amount; /* Issuance amount, or 0 if not given */
     uint64_t inflation_keys; /* Number of reissuance tokens, or 0 if none given */
@@ -270,6 +275,90 @@ WALLY_CORE_API int wally_psbt_input_sp_spend_keypath_add(
     size_t fingerprint_len,
     const uint32_t *child_path,
     size_t child_path_len);
+
+/**
+ * Set or replace an aggregate input silent payment partial ECDH share on an input.
+ *
+ * :param input: The input to set the share on.
+ * :param scan_key: The recipient's compressed scan public key.
+ * :param scan_key_len: Length of ``scan_key`` in bytes. Must be `EC_PUBLIC_KEY_LEN`.
+ * :param participant: The contributing party's compressed public key.
+ * :param participant_len: Length of ``participant``. Must be `EC_PUBLIC_KEY_LEN`.
+ * :param share: The compressed partial ECDH share point, ``x_i * scan_key``.
+ * :param share_len: Length of ``share`` in bytes. Must be `EC_PUBLIC_KEY_LEN`.
+ *
+ * Used when the input's key is an aggregate - MuSig2 or FROST - whose secret
+ * no single party holds. Each party contributes the share for its own portion,
+ * and the shares are combined to give the BIP352 ECDH point for the aggregate.
+ * It must be accompanied by its proof, see
+ * `wally_psbt_input_set_sp_partial_dleq_proof`.
+ */
+WALLY_CORE_API int wally_psbt_input_set_sp_partial_ecdh_share(
+    struct wally_psbt_input *input,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    const unsigned char *participant,
+    size_t participant_len,
+    const unsigned char *share,
+    size_t share_len);
+
+/**
+ * Set or replace an aggregate input silent payment partial DLEQ proof on an input.
+ *
+ * :param input: The input to set the proof on.
+ * :param scan_key: The recipient's compressed scan public key.
+ * :param scan_key_len: Length of ``scan_key`` in bytes. Must be `EC_PUBLIC_KEY_LEN`.
+ * :param participant: The contributing party's compressed public key.
+ * :param participant_len: Length of ``participant``. Must be `EC_PUBLIC_KEY_LEN`.
+ * :param proof: The BIP374 proof binding the share to ``participant``.
+ * :param proof_len: Length of ``proof`` in bytes. Must be 64.
+ *
+ * As with BIP-375, a share without its proof makes the PSBT invalid to sign.
+ */
+WALLY_CORE_API int wally_psbt_input_set_sp_partial_dleq_proof(
+    struct wally_psbt_input *input,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    const unsigned char *participant,
+    size_t participant_len,
+    const unsigned char *proof,
+    size_t proof_len);
+
+/**
+ * Find a partial ECDH share on an input by scan key and participant key.
+ *
+ * :param input: The input to find the share in.
+ * :param scan_key: The recipient's compressed scan public key.
+ * :param scan_key_len: Length of ``scan_key`` in bytes. Must be `EC_PUBLIC_KEY_LEN`.
+ * :param participant: The contributing party's compressed participant public key.
+ * :param participant_len: Length of ``participant`` in bytes. Must be `EC_PUBLIC_KEY_LEN`.
+ * :param written: Destination for the 1 based index of the share, or 0 if not found.
+ */
+WALLY_CORE_API int wally_psbt_input_find_sp_partial_ecdh_share(
+    const struct wally_psbt_input *input,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    const unsigned char *participant,
+    size_t participant_len,
+    size_t *written);
+
+/**
+ * Find a partial DLEQ proof on an input by scan key and participant key.
+ *
+ * :param input: The input to find the proof in.
+ * :param scan_key: The recipient's compressed scan public key.
+ * :param scan_key_len: Length of ``scan_key`` in bytes. Must be `EC_PUBLIC_KEY_LEN`.
+ * :param participant: The contributing party's compressed participant public key.
+ * :param participant_len: Length of ``participant`` in bytes. Must be `EC_PUBLIC_KEY_LEN`.
+ * :param written: Destination for the 1 based index of the proof, or 0 if not found.
+ */
+WALLY_CORE_API int wally_psbt_input_find_sp_partial_dleq_proof(
+    const struct wally_psbt_input *input,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    const unsigned char *participant,
+    size_t participant_len,
+    size_t *written);
 
 /**
  * Set the previous txid in an input.

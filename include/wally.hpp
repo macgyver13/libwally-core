@@ -1673,6 +1673,12 @@ inline int psbt_get_locktime(const PSBT& psbt, size_t* written) {
     return detail::check_ret(__FUNCTION__, ret);
 }
 
+template <class PSBT, class MUSIG_INPUTS>
+inline int psbt_get_sp_musig_status(const PSBT& psbt, const MUSIG_INPUTS& musig_inputs, size_t num_musig_inputs, uint32_t flags, size_t* written) {
+    int ret = ::wally_psbt_get_sp_musig_status(detail::get_p(psbt), detail::get_p(musig_inputs), num_musig_inputs, flags, written);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
 template <class PSBT, class BYTES_OUT>
 inline int psbt_get_sp_smallest_outpoint(const PSBT& psbt, BYTES_OUT& bytes_out) {
     int ret = ::wally_psbt_get_sp_smallest_outpoint(detail::get_p(psbt), bytes_out.data(), bytes_out.size());
@@ -1774,6 +1780,18 @@ inline int psbt_input_find_musig2_pubnonce(const INPUT& input, const PARTICIPANT
 template <class INPUT, class PUB_KEY>
 inline int psbt_input_find_signature(const INPUT& input, const PUB_KEY& pub_key, size_t* written) {
     int ret = ::wally_psbt_input_find_signature(detail::get_p(input), pub_key.data(), pub_key.size(), written);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class INPUT, class SCAN_KEY, class PARTICIPANT>
+inline int psbt_input_find_sp_partial_dleq_proof(const INPUT& input, const SCAN_KEY& scan_key, const PARTICIPANT& participant, size_t* written) {
+    int ret = ::wally_psbt_input_find_sp_partial_dleq_proof(detail::get_p(input), scan_key.data(), scan_key.size(), participant.data(), participant.size(), written);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class INPUT, class SCAN_KEY, class PARTICIPANT>
+inline int psbt_input_find_sp_partial_ecdh_share(const INPUT& input, const SCAN_KEY& scan_key, const PARTICIPANT& participant, size_t* written) {
+    int ret = ::wally_psbt_input_find_sp_partial_ecdh_share(detail::get_p(input), scan_key.data(), scan_key.size(), participant.data(), participant.size(), written);
     return detail::check_ret(__FUNCTION__, ret);
 }
 
@@ -1900,6 +1918,18 @@ inline int psbt_input_set_sighash(const INPUT& input, uint32_t sighash) {
 template <class INPUT>
 inline int psbt_input_set_signatures(const INPUT& input, const struct wally_map* map_in) {
     int ret = ::wally_psbt_input_set_signatures(detail::get_p(input), map_in);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class INPUT, class SCAN_KEY, class PARTICIPANT, class PROOF>
+inline int psbt_input_set_sp_partial_dleq_proof(const INPUT& input, const SCAN_KEY& scan_key, const PARTICIPANT& participant, const PROOF& proof) {
+    int ret = ::wally_psbt_input_set_sp_partial_dleq_proof(detail::get_p(input), scan_key.data(), scan_key.size(), participant.data(), participant.size(), proof.data(), proof.size());
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class INPUT, class SCAN_KEY, class PARTICIPANT, class SHARE>
+inline int psbt_input_set_sp_partial_ecdh_share(const INPUT& input, const SCAN_KEY& scan_key, const PARTICIPANT& participant, const SHARE& share) {
+    int ret = ::wally_psbt_input_set_sp_partial_ecdh_share(detail::get_p(input), scan_key.data(), scan_key.size(), participant.data(), participant.size(), share.data(), share.size());
     return detail::check_ret(__FUNCTION__, ret);
 }
 
@@ -2168,6 +2198,18 @@ inline int psbt_signing_cache_enable(const PSBT& psbt, uint32_t flags) {
 template <class PSBT, class INDICES, class PRIV_KEYS, class ENTROPY>
 inline int psbt_sp_contribute(const PSBT& psbt, const INDICES& indices, const PRIV_KEYS& priv_keys, const ENTROPY& entropy, uint32_t flags) {
     int ret = ::wally_psbt_sp_contribute(detail::get_p(psbt), indices.data(), indices.size(), priv_keys.data(), priv_keys.size(), entropy.data(), entropy.size(), flags);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT, class MUSIG_INPUTS, class PRIV_KEYS, class ENTROPY>
+inline int psbt_sp_musig_contribute(const PSBT& psbt, const MUSIG_INPUTS& musig_inputs, size_t num_musig_inputs, const PRIV_KEYS& priv_keys, const ENTROPY& entropy, uint32_t flags) {
+    int ret = ::wally_psbt_sp_musig_contribute(detail::get_p(psbt), detail::get_p(musig_inputs), num_musig_inputs, priv_keys.data(), priv_keys.size(), entropy.data(), entropy.size(), flags);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT, class MUSIG_INPUTS>
+inline int psbt_sp_musig_resolve_shares(const PSBT& psbt, const MUSIG_INPUTS& musig_inputs, size_t num_musig_inputs, uint32_t flags) {
+    int ret = ::wally_psbt_sp_musig_resolve_shares(detail::get_p(psbt), detail::get_p(musig_inputs), num_musig_inputs, flags);
     return detail::check_ret(__FUNCTION__, ret);
 }
 

@@ -413,6 +413,7 @@ static void destroy_words(PyObject *obj) { (void)obj; }
 %pybuffer_nullable_binary(const unsigned char* seckey, size_t seckey_len);
 %pybuffer_nullable_binary(const unsigned char* session_secrand32, size_t session_secrand32_len);
 %pybuffer_nullable_binary(const unsigned char* session_secrand32, size_t session_secrand_len);
+%pybuffer_nullable_binary(const unsigned char* share, size_t share_len);
 %pybuffer_nullable_binary(const unsigned char* sig, size_t sig_len);
 %pybuffer_nullable_binary(const unsigned char* sub_pubkey, size_t sub_pubkey_len);
 %pybuffer_nullable_binary(const unsigned char* summed_key, size_t summed_key_len);

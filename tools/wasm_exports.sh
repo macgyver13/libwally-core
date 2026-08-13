@@ -358,6 +358,7 @@ EXPORTED_FUNCTIONS="['_malloc','_free','_bip32_key_free' \
 ,'_wally_psbt_get_output_unknowns_size' \
 ,'_wally_psbt_get_output_witness_script' \
 ,'_wally_psbt_get_output_witness_script_len' \
+,'_wally_psbt_get_sp_musig_status' \
 ,'_wally_psbt_get_sp_smallest_outpoint' \
 ,'_wally_psbt_get_sp_status' \
 ,'_wally_psbt_get_tx_modifiable_flags' \
@@ -382,6 +383,8 @@ EXPORTED_FUNCTIONS="['_malloc','_free','_bip32_key_free' \
 ,'_wally_psbt_input_find_musig2_pubkey' \
 ,'_wally_psbt_input_find_musig2_pubnonce' \
 ,'_wally_psbt_input_find_signature' \
+,'_wally_psbt_input_find_sp_partial_dleq_proof' \
+,'_wally_psbt_input_find_sp_partial_ecdh_share' \
 ,'_wally_psbt_input_find_unknown' \
 ,'_wally_psbt_input_get_musig2_partial_sig_size' \
 ,'_wally_psbt_input_get_musig2_pubnonce_size' \
@@ -403,6 +406,8 @@ EXPORTED_FUNCTIONS="['_malloc','_free','_bip32_key_free' \
 ,'_wally_psbt_input_set_sequence' \
 ,'_wally_psbt_input_set_sighash' \
 ,'_wally_psbt_input_set_signatures' \
+,'_wally_psbt_input_set_sp_partial_dleq_proof' \
+,'_wally_psbt_input_set_sp_partial_ecdh_share' \
 ,'_wally_psbt_input_set_taproot_internal_key' \
 ,'_wally_psbt_input_set_taproot_signature' \
 ,'_wally_psbt_input_set_unknowns' \
@@ -476,6 +481,8 @@ EXPORTED_FUNCTIONS="['_malloc','_free','_bip32_key_free' \
 ,'_wally_psbt_signing_cache_disable' \
 ,'_wally_psbt_signing_cache_enable' \
 ,'_wally_psbt_sp_contribute' \
+,'_wally_psbt_sp_musig_contribute' \
+,'_wally_psbt_sp_musig_resolve_shares' \
 ,'_wally_psbt_sp_resolve' \
 ,'_wally_psbt_sp_resolve_shares' \
 ,'_wally_psbt_to_base64' \
