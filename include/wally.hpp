@@ -1796,9 +1796,21 @@ inline int psbt_signing_cache_enable(const PSBT& psbt, uint32_t flags) {
     return detail::check_ret(__FUNCTION__, ret);
 }
 
+template <class PSBT, class INDICES, class PRIV_KEYS, class ENTROPY>
+inline int psbt_sp_contribute(const PSBT& psbt, const INDICES& indices, const PRIV_KEYS& priv_keys, const ENTROPY& entropy, uint32_t flags) {
+    int ret = ::wally_psbt_sp_contribute(detail::get_p(psbt), indices.data(), indices.size(), priv_keys.data(), priv_keys.size(), entropy.data(), entropy.size(), flags);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
 template <class PSBT, class PRIV_KEYS, class ENTROPY>
 inline int psbt_sp_resolve(const PSBT& psbt, const PRIV_KEYS& priv_keys, const ENTROPY& entropy, uint32_t flags) {
     int ret = ::wally_psbt_sp_resolve(detail::get_p(psbt), priv_keys.data(), priv_keys.size(), entropy.data(), entropy.size(), flags);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT>
+inline int psbt_sp_resolve_shares(const PSBT& psbt, uint32_t flags) {
+    int ret = ::wally_psbt_sp_resolve_shares(detail::get_p(psbt), flags);
     return detail::check_ret(__FUNCTION__, ret);
 }
 
