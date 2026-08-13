@@ -327,6 +327,7 @@ static jobjectArray create_jstringArray(JNIEnv *jenv, char **p, size_t len) {
 %apply(char *STRING, size_t LENGTH) { (const unsigned char* script, size_t script_len) };
 %apply(char *STRING, size_t LENGTH) { (const unsigned char* scriptpubkey, size_t scriptpubkey_len) };
 %apply(char *STRING, size_t LENGTH) { (const unsigned char* seckey, size_t seckey_len) };
+%apply(char *STRING, size_t LENGTH) { (const unsigned char* session_digest, size_t digest_len) };
 %apply(char *STRING, size_t LENGTH) { (const unsigned char* session_secrand32, size_t session_secrand32_len) };
 %apply(char *STRING, size_t LENGTH) { (const unsigned char* session_secrand32, size_t session_secrand_len) };
 %apply(char *STRING, size_t LENGTH) { (const unsigned char* share, size_t share_len) };
@@ -354,6 +355,7 @@ static jobjectArray create_jstringArray(JNIEnv *jenv, char **p, size_t len) {
 %apply(char *STRING, size_t LENGTH) { (unsigned char* pub_key_out, size_t pub_key_out_len) };
 %apply(char *STRING, size_t LENGTH) { (unsigned char* s2c_opening_out, size_t s2c_opening_out_len) };
 %apply(char *STRING, size_t LENGTH) { (unsigned char* scalar, size_t scalar_len) };
+%apply(char *STRING, size_t LENGTH) { (unsigned char* session_digest_out, size_t digest_len) };
 %apply(char *STRING, size_t LENGTH) { (unsigned char* sig64_out, size_t sig64_out_len) };
 %apply(char *STRING, size_t LENGTH) { (unsigned char* vbf_out, size_t vbf_out_len) };
 %apply(char *STRING, size_t LENGTH) { (void* bytes, size_t bytes_len) };
@@ -1345,6 +1347,8 @@ static jobjectArray create_jstringArray(JNIEnv *jenv, char **p, size_t len) {
 %returns_struct(wally_musig_nonce_process,          wally_musig_session);
 %returns_struct(wally_musig_partial_sign,           wally_musig_partial_sig);
 %returns_struct(wally_psbt_musig2_add_nonce,        wally_musig_secnonce);
+%returns_struct(wally_psbt_musig2_agg_then_derive_add_nonce, wally_musig_secnonce);
+%returns_struct(wally_psbt_musig2_agg_then_derive_sign,      wally_musig_partial_sig);
 %returns_struct(wally_psbt_musig2_sign,             wally_musig_partial_sig);
 
 /* MuSig2 opaque type destructors */
@@ -1371,6 +1375,7 @@ static jobjectArray create_jstringArray(JNIEnv *jenv, char **p, size_t len) {
 
 /* MuSig2 PSBT helpers taking a keyagg cache */
 %returns_void__(wally_psbt_musig2_finalize_input);
+%returns_void__(wally_psbt_musig2_agg_then_derive_finalize_input);
 #endif /* ndef BUILD_STANDARD_SECP */
 
 %returns_void__(wally_psbt_populate_musig2_from_descriptor);
