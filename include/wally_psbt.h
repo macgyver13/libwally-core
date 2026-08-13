@@ -3465,6 +3465,68 @@ WALLY_CORE_API int wally_psbt_musig2_finalize_input(
     const struct wally_musig_keyagg_cache *keyagg_cache,
     uint32_t flags);
 
+/**
+ * Generate and store a MuSig2 nonce for a BIP-390 aggregate-then-derive input.
+ *
+ * ``agg_pubkey`` is the bare aggregate key identifying the input's
+ * PSBT_IN_MUSIG2_PARTICIPANT_PUBKEYS entry. ``path`` is the unhardened
+ * BIP-328 synthetic derivation path; its result must equal
+ * PSBT_IN_TAP_INTERNAL_KEY. The nonce is stored under the BIP-341 output key.
+ * If ``msg32`` is NULL, the input sighash is used when available, matching
+ * wally_psbt_musig2_add_nonce. Otherwise ``msg32`` must contain 32 bytes.
+ */
+WALLY_CORE_API int wally_psbt_musig2_agg_then_derive_add_nonce(
+    struct wally_psbt *psbt,
+    size_t index,
+    const unsigned char *session_secrand32,
+    size_t session_secrand_len,
+    const unsigned char *seckey,
+    size_t seckey_len,
+    const unsigned char *pubkey33,
+    size_t pubkey33_len,
+    const unsigned char *agg_pubkey,
+    size_t agg_pubkey_len,
+    const uint32_t *path,
+    size_t path_len,
+    const unsigned char *msg32,
+    size_t msg32_len,
+    uint32_t flags,
+    struct wally_musig_secnonce **secnonce_out);
+
+/**
+ * Add a MuSig2 partial signature for a BIP-390 aggregate-then-derive input.
+ * ``agg_pubkey`` and ``path`` have the same meaning as for
+ * wally_psbt_musig2_agg_then_derive_add_nonce. Only key-path signing is
+ * supported. ``secnonce`` is zeroed by signing and must never be reused.
+ */
+WALLY_CORE_API int wally_psbt_musig2_agg_then_derive_sign(
+    struct wally_psbt *psbt,
+    size_t index,
+    struct wally_musig_secnonce *secnonce,
+    const unsigned char *seckey,
+    size_t seckey_len,
+    const unsigned char *pubkey33,
+    size_t pubkey33_len,
+    const unsigned char *agg_pubkey,
+    size_t agg_pubkey_len,
+    const uint32_t *path,
+    size_t path_len,
+    uint32_t flags,
+    struct wally_musig_partial_sig **partial_sig_out);
+
+/**
+ * Aggregate all partial signatures for a BIP-390 aggregate-then-derive input
+ * and store the resulting signature as PSBT_IN_TAP_KEY_SIG.
+ */
+WALLY_CORE_API int wally_psbt_musig2_agg_then_derive_finalize_input(
+    struct wally_psbt *psbt,
+    size_t index,
+    const unsigned char *agg_pubkey,
+    size_t agg_pubkey_len,
+    const uint32_t *path,
+    size_t path_len,
+    uint32_t flags);
+
 #ifdef __cplusplus
 }
 #endif
