@@ -873,5 +873,455 @@ class SilentPaymentsTests(unittest.TestCase):
         wally_psbt_free(psbt)
 
 
+# Two valid compressed public keys, to stand in for a scan key and the
+# participant keys of an aggregate input
+SCAN_KEY = RECIPIENT['scan_pub_key']
+PARTICIPANT_A = RECIPIENT['spend_pub_key']
+PARTICIPANT_B = '02' + '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'
+
+
+class PartialSharesTests(unittest.TestCase):
+    """The per-participant share and proof fields of a aggregate input.
+
+    Where BIP375's fields carry one share per eligible input, these carry one
+    share per party contributing to a single aggregate input key, and so are
+    keyed by the contributing party as well as the recipient.
+    """
+
+    def make_psbt(self):
+        psbt = pointer(wally_psbt())
+        self.assertEqual(wally_psbt_init_alloc(2, 1, 1, 0, 0, psbt), WALLY_OK)
+        txid, txid_len = make_cbuffer('11' * 32)
+        tx_in = pointer(wally_tx_input())
+        self.assertEqual(wally_tx_input_init_alloc(txid, txid_len, 0, 0xffffffff,
+                                                   None, 0, None, tx_in), WALLY_OK)
+        self.assertEqual(wally_psbt_add_tx_input_at(psbt, 0, 0, tx_in), WALLY_OK)
+        tx_out = pointer(wally_tx_output())
+        self.assertEqual(wally_tx_output_init_alloc(90000, None, 0, tx_out), WALLY_OK)
+        self.assertEqual(wally_psbt_add_tx_output_at(psbt, 0, 0, tx_out), WALLY_OK)
+        info, info_len = make_cbuffer(RECIPIENT['scan_pub_key'] +
+                                      RECIPIENT['spend_pub_key'])
+        self.assertEqual(wally_psbt_set_output_sp_v0_info(psbt, 0, info, info_len),
+                         WALLY_OK)
+        return psbt
+
+    def set_share(self, psbt, scan_hex, participant_hex, share_hex):
+        scan, scan_len = make_cbuffer(scan_hex)
+        party, party_len = make_cbuffer(participant_hex)
+        share, share_len = make_cbuffer(share_hex)
+        return wally_psbt_input_set_sp_partial_ecdh_share(
+            psbt.contents.inputs, scan, scan_len, party, party_len,
+            share, share_len)
+
+    def set_proof(self, psbt, scan_hex, participant_hex, proof_hex):
+        scan, scan_len = make_cbuffer(scan_hex)
+        party, party_len = make_cbuffer(participant_hex)
+        proof, proof_len = make_cbuffer(proof_hex)
+        return wally_psbt_input_set_sp_partial_dleq_proof(
+            psbt.contents.inputs, scan, scan_len, party, party_len,
+            proof, proof_len)
+
+    def find_share(self, psbt, scan_hex, participant_hex):
+        scan, scan_len = make_cbuffer(scan_hex)
+        party, party_len = make_cbuffer(participant_hex)
+        return wally_psbt_input_find_sp_partial_ecdh_share(
+            psbt.contents.inputs, scan, scan_len, party, party_len)
+
+    def test_set_and_find(self):
+        """Test that shares are distinguished by their contributing party"""
+        psbt = self.make_psbt()
+        self.assertEqual(self.set_share(psbt, SCAN_KEY, PARTICIPANT_A,
+                                        PARTICIPANT_A), WALLY_OK)
+        self.assertEqual(self.set_share(psbt, SCAN_KEY, PARTICIPANT_B,
+                                        PARTICIPANT_B), WALLY_OK)
+        self.assertEqual(psbt.contents.inputs[0].sp_partial_ecdh_shares.num_items, 2)
+
+        # Both parties' shares are retrievable under the same scan key
+        self.assertEqual(self.find_share(psbt, SCAN_KEY, PARTICIPANT_A), (WALLY_OK, 1))
+        self.assertEqual(self.find_share(psbt, SCAN_KEY, PARTICIPANT_B), (WALLY_OK, 2))
+        # A party that has not contributed is absent, not an error
+        self.assertEqual(self.find_share(psbt, PARTICIPANT_B, PARTICIPANT_A),
+                         (WALLY_OK, 0))
+
+        # Replacing a party's share leaves the other party's alone
+        self.assertEqual(self.set_share(psbt, SCAN_KEY, PARTICIPANT_A,
+                                        PARTICIPANT_B), WALLY_OK)
+        self.assertEqual(psbt.contents.inputs[0].sp_partial_ecdh_shares.num_items, 2)
+        wally_psbt_free(psbt)
+
+    def test_invalid_args(self):
+        """Test that malformed keys, shares and proofs are rejected"""
+        psbt = self.make_psbt()
+        short_key, odd_key = '02' + '11' * 31, '05' + '11' * 32
+        for scan, party in [(short_key, PARTICIPANT_A), (SCAN_KEY, short_key),
+                            (odd_key, PARTICIPANT_A), (SCAN_KEY, odd_key)]:
+            self.assertEqual(self.set_share(psbt, scan, party, PARTICIPANT_A),
+                             WALLY_EINVAL)
+            self.assertEqual(self.set_proof(psbt, scan, party, '00' * 64),
+                             WALLY_EINVAL)
+
+        # A share must be a valid compressed point, a proof exactly 64 bytes
+        for bad_share in [short_key, odd_key, '02' + '11' * 33]:
+            self.assertEqual(self.set_share(psbt, SCAN_KEY, PARTICIPANT_A, bad_share),
+                             WALLY_EINVAL)
+        for bad_proof in ['00' * 63, '00' * 65]:
+            self.assertEqual(self.set_proof(psbt, SCAN_KEY, PARTICIPANT_A, bad_proof),
+                             WALLY_EINVAL)
+
+        # Nothing above was stored
+        self.assertEqual(psbt.contents.inputs[0].sp_partial_ecdh_shares.num_items, 0)
+        self.assertEqual(psbt.contents.inputs[0].sp_partial_dleq_proofs.num_items, 0)
+        wally_psbt_free(psbt)
+
+    def serialized(self, psbt):
+        ret, length = wally_psbt_get_length(psbt, 0)
+        self.assertEqual(ret, WALLY_OK)
+        buf, buf_len = make_cbuffer('00' * length)
+        ret, written = wally_psbt_to_bytes(psbt, 0, buf, buf_len)
+        self.assertEqual((ret, written), (WALLY_OK, length))
+        return bytes(bytearray(buf)[:written])
+
+    def test_serialization(self):
+        """Test that the fields survive a serialization round trip unchanged"""
+        psbt = self.make_psbt()
+        self.assertEqual(self.set_share(psbt, SCAN_KEY, PARTICIPANT_A,
+                                        PARTICIPANT_B), WALLY_OK)
+        self.assertEqual(self.set_proof(psbt, SCAN_KEY, PARTICIPANT_A,
+                                        '5a' * 64), WALLY_OK)
+        original = self.serialized(psbt)
+
+        parsed = pointer(wally_psbt())
+        self.assertEqual(wally_psbt_from_bytes(original, len(original), 0, parsed),
+                         WALLY_OK)
+        self.assertEqual(parsed.contents.inputs[0].sp_partial_ecdh_shares.num_items, 1)
+        self.assertEqual(parsed.contents.inputs[0].sp_partial_dleq_proofs.num_items, 1)
+        self.assertEqual(self.find_share(parsed, SCAN_KEY, PARTICIPANT_A), (WALLY_OK, 1))
+        self.assertEqual(self.serialized(parsed), original)
+
+        # Combining is per-party, so a second signer's share merges in
+        self.assertEqual(self.set_share(psbt, SCAN_KEY, PARTICIPANT_B,
+                                        PARTICIPANT_A), WALLY_OK)
+        self.assertEqual(wally_psbt_combine(parsed, psbt), WALLY_OK)
+        self.assertEqual(parsed.contents.inputs[0].sp_partial_ecdh_shares.num_items, 2)
+        wally_psbt_free(parsed)
+        wally_psbt_free(psbt)
+
+    def test_v0_disallowed(self):
+        """Test that the fields cannot appear in a v0 PSBT"""
+        psbt = self.make_psbt()
+        self.assertEqual(self.set_share(psbt, SCAN_KEY, PARTICIPANT_A,
+                                        PARTICIPANT_B), WALLY_OK)
+        self.assertEqual(self.set_proof(psbt, SCAN_KEY, PARTICIPANT_A,
+                                        '5a' * 64), WALLY_OK)
+        # Downgrading to v0 would drop the fields silently, so it is refused
+        self.assertEqual(wally_psbt_set_version(psbt, 0, 0), WALLY_EINVAL)
+
+        wally_psbt_free(psbt)
+
+        # And a serialized v0 PSBT carrying one is rejected on parse. wally
+        # will not produce such a PSBT, so splice the field into the input map
+        # of an otherwise valid v0 serialization by hand.
+        v0 = self.v0_psbt_bytes()
+        parsed = pointer(wally_psbt())
+        self.assertEqual(wally_psbt_from_bytes(v0, len(v0), 0, parsed), WALLY_OK)
+        wally_psbt_free(parsed)
+
+        # The trailing bytes are the global, input and output map separators
+        self.assertEqual(v0[-3:], bytes(3))
+        keydata = bytes([0x21]) + bytes.fromhex(SCAN_KEY + PARTICIPANT_A)
+        value = bytes.fromhex(PARTICIPANT_B)
+        field = bytes([len(keydata)]) + keydata + bytes([len(value)]) + value
+        spliced = v0[:-2] + field + v0[-2:]
+        parsed = pointer(wally_psbt())
+        self.assertEqual(wally_psbt_from_bytes(spliced, len(spliced), 0, parsed),
+                         WALLY_EINVAL)
+
+        # A field that v0 does allow, spliced at the same offset, parses. So
+        # the failure above is the version rule, not a bad splice or keydata.
+        keydata = bytes([0x06]) + bytes.fromhex(PARTICIPANT_A)  # BIP32_DERIVATION
+        value = bytes.fromhex('00000000')  # Fingerprint, empty path
+        legal = bytes([len(keydata)]) + keydata + bytes([len(value)]) + value
+        spliced = v0[:-2] + legal + v0[-2:]
+        parsed = pointer(wally_psbt())
+        self.assertEqual(wally_psbt_from_bytes(spliced, len(spliced), 0, parsed),
+                         WALLY_OK)
+        self.assertEqual(parsed.contents.inputs[0].keypaths.num_items, 1)
+        wally_psbt_free(parsed)
+
+    def v0_psbt_bytes(self):
+        """A minimal serialized PSBT with one empty input and output map."""
+        tx = pointer(wally_tx())
+        self.assertEqual(wally_tx_init_alloc(2, 0, 1, 1, tx), WALLY_OK)
+        txid, txid_len = make_cbuffer('11' * 32)
+        tx_in = pointer(wally_tx_input())
+        self.assertEqual(wally_tx_input_init_alloc(txid, txid_len, 0, 0xffffffff,
+                                                   None, 0, None, tx_in), WALLY_OK)
+        self.assertEqual(wally_tx_add_input(tx, tx_in), WALLY_OK)
+        spk, spk_len = make_cbuffer('0014' + '22' * 20)
+        tx_out = pointer(wally_tx_output())
+        self.assertEqual(wally_tx_output_init_alloc(1000, spk, spk_len, tx_out), WALLY_OK)
+        self.assertEqual(wally_tx_add_output(tx, tx_out), WALLY_OK)
+
+        psbt = pointer(wally_psbt())
+        self.assertEqual(wally_psbt_init_alloc(0, 1, 1, 0, 0, psbt), WALLY_OK)
+        self.assertEqual(wally_psbt_set_global_tx(psbt, tx), WALLY_OK)
+        serialized = self.serialized(psbt)
+        wally_psbt_free(psbt)
+        wally_tx_free(tx)
+        return serialized
+
+
+SECP256K1_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+MUSIG_SKS = ['11' * 32, '22' * 32, '33' * 32]
+MUSIG_PATH = (0, 7)
+
+
+def tagged_hash(tag, data):
+    import hashlib
+    t = hashlib.sha256(tag.encode()).digest()
+    return hashlib.sha256(t + t + data).digest()
+
+
+def pubkey_of(sk_hex):
+    sk, sk_len = make_cbuffer(sk_hex)
+    out, out_len = make_cbuffer('00' * 33)
+    assert wally_ec_public_key_from_private_key(sk, sk_len, out, out_len) == WALLY_OK
+    return bytes(bytearray(out))
+
+
+def musig_aggregate_secret(sks, path):
+    """The taproot output secret a_Q of tr(musig(sks)/path), and its output key.
+
+    Computed here independently of the C implementation, so that the shares it
+    combines can be checked against what a single party holding a_Q derives.
+    """
+    import hashlib, hmac
+    sorted_pks = sorted(pubkey_of(sk) for sk in sks)
+    blob = b''.join(sorted_pks)
+    pks_hash = tagged_hash('KeyAgg list', blob)
+    second = next((pk for pk in sorted_pks[1:] if pk != sorted_pks[0]), None)
+
+    def coef(pk):
+        if second is not None and pk == second:
+            return 1
+        return int.from_bytes(tagged_hash('KeyAgg coefficient', pks_hash + pk), 'big')
+
+    d0 = sum(coef(pubkey_of(sk)) * int(sk, 16) for sk in sks) % SECP256K1_N
+
+    keys, keys_len = make_cbuffer(blob.hex())
+    cache = c_void_p()
+    assert wally_musig_pubkey_agg(keys, keys_len, None, 0, cache) == WALLY_OK
+    agg, agg_len = make_cbuffer('00' * 33)
+    assert wally_musig_pubkey_get(cache, agg, agg_len) == WALLY_OK
+    aggb, aggb_len = make_cbuffer(bytes(bytearray(agg)).hex())
+    xpub = POINTER(ext_key)()
+    assert wally_musig_pubkey_to_xpub(aggb, aggb_len, 0x0488B21E, xpub) == WALLY_OK
+
+    tacc = 0
+    for index in path:
+        chain_code = bytes(bytearray(xpub.contents.chain_code))
+        parent = bytes(bytearray(xpub.contents.pub_key))
+        il = hmac.new(chain_code, parent + index.to_bytes(4, 'big'),
+                      hashlib.sha512).digest()[:32]
+        tacc = (tacc + int.from_bytes(il, 'big')) % SECP256K1_N
+        child = POINTER(ext_key)()
+        assert bip32_key_from_parent_alloc(xpub, index, 0x1, child) == WALLY_OK
+        xpub = child
+
+    internal = bytes(bytearray(xpub.contents.pub_key))
+    gacc = 1
+    if internal[0] == 0x03:  # An x-only tweak negates an odd-Y key
+        gacc, tacc = -1, (-tacc) % SECP256K1_N
+    tacc = (tacc + int.from_bytes(tagged_hash('TapTweak', internal[1:]), 'big')) % SECP256K1_N
+
+    d = (gacc * d0 + tacc) % SECP256K1_N
+    output_key = pubkey_of('%064x' % d)
+    if output_key[0] == 0x03:  # BIP-352 uses the even-Y output key
+        d = (-d) % SECP256K1_N
+        output_key = pubkey_of('%064x' % d)
+    return '%064x' % d, output_key[1:]
+
+
+class MusigPartialSharesTests(unittest.TestCase):
+    """Combining partial shares from an aggregate input's participants.
+
+    The claim under test is BIP-352's algebraic equivalence: an input spent
+    with an aggregate key must derive exactly the outputs that a single party
+    holding the aggregate secret would, even though no party ever holds it.
+    """
+
+    def setUp(self):
+        self.agg_secret, self.output_key = musig_aggregate_secret(MUSIG_SKS, MUSIG_PATH)
+        self.pub_keys = b''.join(sorted(pubkey_of(sk) for sk in MUSIG_SKS))
+
+    def build_psbt(self):
+        """A PSBT spending one P2TR input of the aggregate to one recipient."""
+        psbt = pointer(wally_psbt())
+        self.assertEqual(wally_psbt_init_alloc(2, 1, 1, 0, 0, psbt), WALLY_OK)
+        txid, txid_len = make_cbuffer('ab' * 32)
+        tx_in = pointer(wally_tx_input())
+        self.assertEqual(wally_tx_input_init_alloc(txid, txid_len, 0, 0xffffffff,
+                                                   None, 0, None, tx_in), WALLY_OK)
+        self.assertEqual(wally_psbt_add_tx_input_at(psbt, 0, 0, tx_in), WALLY_OK)
+        spk, spk_len = make_cbuffer('5120' + self.output_key.hex())
+        utxo = pointer(wally_tx_output())
+        self.assertEqual(wally_tx_output_init_alloc(100000, spk, spk_len, utxo), WALLY_OK)
+        self.assertEqual(wally_psbt_set_input_witness_utxo(psbt, 0, utxo), WALLY_OK)
+        self.assertEqual(wally_psbt_set_input_amount(psbt, 0, 100000), WALLY_OK)
+
+        tx_out = pointer(wally_tx_output())
+        self.assertEqual(wally_tx_output_init_alloc(90000, None, 0, tx_out), WALLY_OK)
+        self.assertEqual(wally_psbt_add_tx_output_at(psbt, 0, 0, tx_out), WALLY_OK)
+        self.assertEqual(wally_psbt_set_output_amount(psbt, 0, 90000), WALLY_OK)
+        info, info_len = make_cbuffer(RECIPIENT['scan_pub_key'] +
+                                      RECIPIENT['spend_pub_key'])
+        self.assertEqual(wally_psbt_set_output_sp_v0_info(psbt, 0, info, info_len),
+                         WALLY_OK)
+        return psbt
+
+    def musig_inputs(self, pub_keys=None):
+        keys = pub_keys if pub_keys is not None else self.pub_keys
+        self.keys_buf, keys_len = make_cbuffer(keys.hex())
+        self.path_buf = (c_uint32 * len(MUSIG_PATH))(*MUSIG_PATH)
+        musig = wally_sp_musig_input()
+        musig.index = 0
+        musig.pub_keys = cast(self.keys_buf, c_void_p)
+        musig.pub_keys_len = keys_len
+        musig.path = cast(self.path_buf, c_void_p)
+        musig.path_len = len(MUSIG_PATH)
+        return pointer(musig)
+
+    def contribute(self, psbt, sk_hex, musig=None):
+        keys, keys_len = make_cbuffer(sk_hex)
+        entropy, entropy_len = make_cbuffer(ENTROPY)
+        return wally_psbt_sp_musig_contribute(psbt, musig or self.musig_inputs(), 1,
+                                              keys, keys_len, entropy, entropy_len, 0)
+
+    def output_script(self, psbt):
+        ret, length = wally_psbt_get_output_script_len(psbt, 0)
+        self.assertEqual(ret, WALLY_OK)
+        buf, buf_len = make_cbuffer('00' * length)
+        ret, written = wally_psbt_get_output_script(psbt, 0, buf, buf_len)
+        self.assertEqual(ret, WALLY_OK)
+        return bytes(bytearray(buf)[:written])
+
+    def single_party_script(self):
+        """What one party holding the whole aggregate secret would derive."""
+        psbt = self.build_psbt()
+        key, key_len = make_cbuffer(self.agg_secret)
+        entropy, entropy_len = make_cbuffer(ENTROPY)
+        self.assertEqual(wally_psbt_sp_resolve(psbt, key, key_len,
+                                               entropy, entropy_len, 0), WALLY_OK)
+        script = self.output_script(psbt)
+        wally_psbt_free(psbt)
+        return script
+
+    def test_equivalence(self):
+        """Test that combined partial shares derive the single-party output"""
+        psbt = self.build_psbt()
+        musig = self.musig_inputs()
+
+        # Each party contributes in turn. Until the last has, the outputs
+        # cannot be derived and there is nothing valid to sign.
+        for i, sk in enumerate(MUSIG_SKS):
+            self.assertEqual(wally_psbt_get_sp_musig_status(psbt, musig, 1, 0),
+                             (WALLY_OK, WALLY_SP_INCOMPLETE), 'before party %d' % i)
+            self.assertEqual(wally_psbt_sp_musig_resolve_shares(psbt, musig, 1, 0),
+                             WALLY_EINVAL, 'before party %d' % i)
+            self.assertEqual(self.contribute(psbt, sk, musig), WALLY_OK, sk)
+
+        self.assertEqual(psbt.contents.inputs[0].sp_partial_ecdh_shares.num_items, 3)
+        self.assertEqual(psbt.contents.inputs[0].sp_partial_dleq_proofs.num_items, 3)
+
+        # With every share present the outputs derive, and they are exactly
+        # those of the equivalent single-party spend
+        self.assertEqual(wally_psbt_sp_musig_resolve_shares(psbt, musig, 1, 0), WALLY_OK)
+        self.assertEqual(self.output_script(psbt).hex(),
+                         self.single_party_script().hex())
+        self.assertEqual(wally_psbt_get_sp_musig_status(psbt, musig, 1, 0),
+                         (WALLY_OK, WALLY_SP_COMPLETE))
+        wally_psbt_free(psbt)
+
+    def test_contribute_wrong_key(self):
+        """Test that a key outside the aggregate cannot contribute"""
+        psbt = self.build_psbt()
+        self.assertEqual(self.contribute(psbt, '44' * 32), WALLY_EINVAL)
+        # The failure is transactional: nothing was stored
+        self.assertEqual(psbt.contents.inputs[0].sp_partial_ecdh_shares.num_items, 0)
+        wally_psbt_free(psbt)
+
+    def test_wrong_participants(self):
+        """Test that the participants must aggregate to the input's own key"""
+        psbt = self.build_psbt()
+        musig = self.musig_inputs()
+        for sk in MUSIG_SKS:
+            self.assertEqual(self.contribute(psbt, sk, musig), WALLY_OK)
+
+        # Claiming a different participant set describes an aggregate that is
+        # not the key this input is spent with, so nothing may be derived
+        others = b''.join(sorted(pubkey_of(sk) for sk in ['11' * 32, '22' * 32,
+                                                          '44' * 32]))
+        wrong = self.musig_inputs(others)
+        self.assertEqual(wally_psbt_get_sp_musig_status(psbt, wrong, 1, 0),
+                         (WALLY_OK, WALLY_SP_INVALID))
+        self.assertEqual(wally_psbt_sp_musig_resolve_shares(psbt, wrong, 1, 0),
+                         WALLY_EINVAL)
+        wally_psbt_free(psbt)
+
+    def test_tampered_share(self):
+        """Test that a share which fails its proof is rejected"""
+        psbt = self.build_psbt()
+        musig = self.musig_inputs()
+        for sk in MUSIG_SKS:
+            self.assertEqual(self.contribute(psbt, sk, musig), WALLY_OK)
+
+        # Replace one party's share with another valid point. Its DLEQ proof
+        # no longer holds, which is what stops a party redirecting the payment.
+        item = psbt.contents.inputs[0].sp_partial_ecdh_shares.items[0]
+        scan_key, scan_len = make_cbuffer(RECIPIENT['scan_pub_key'])
+        participant = bytes(bytearray(cast(item.key, POINTER(c_ubyte * 66)).contents))[33:]
+        party, party_len = make_cbuffer(participant.hex())
+        other, other_len = make_cbuffer(pubkey_of('55' * 32).hex())
+        self.assertEqual(wally_psbt_input_set_sp_partial_ecdh_share(
+            psbt.contents.inputs, scan_key, scan_len, party, party_len,
+            other, other_len), WALLY_OK)
+
+        self.assertEqual(wally_psbt_get_sp_musig_status(psbt, musig, 1, 0),
+                         (WALLY_OK, WALLY_SP_INVALID))
+        self.assertEqual(wally_psbt_sp_musig_resolve_shares(psbt, musig, 1, 0),
+                         WALLY_EINVAL)
+        wally_psbt_free(psbt)
+
+    def test_invalid_args(self):
+        """Test that malformed aggregate descriptions are rejected"""
+        psbt = self.build_psbt()
+        musig = self.musig_inputs()
+        keys, keys_len = make_cbuffer(MUSIG_SKS[0])
+        entropy, entropy_len = make_cbuffer(ENTROPY)
+
+        # A NULL/count mismatch, a bad flag, and an out of range input index
+        for args in [(psbt, None, 1, 0), (psbt, musig, 0, 0), (psbt, musig, 1, 1),
+                     (None, musig, 1, 0)]:
+            self.assertEqual(wally_psbt_sp_musig_resolve_shares(*args), WALLY_EINVAL)
+
+        musig.contents.index = 1
+        self.assertEqual(wally_psbt_sp_musig_resolve_shares(psbt, musig, 1, 0),
+                         WALLY_EINVAL)
+        musig.contents.index = 0
+
+        # An aggregate needs at least two participants
+        musig.contents.pub_keys_len = 33
+        self.assertEqual(wally_psbt_sp_musig_resolve_shares(psbt, musig, 1, 0),
+                         WALLY_EINVAL)
+        musig.contents.pub_keys_len = len(self.pub_keys)
+
+        for bad_len in [0, 31, 33]:
+            self.assertEqual(wally_psbt_sp_musig_contribute(psbt, musig, 1, keys,
+                                                            bad_len, entropy,
+                                                            entropy_len, 0),
+                             WALLY_EINVAL)
+        wally_psbt_free(psbt)
+
+
 if __name__ == '__main__':
     unittest.main()
