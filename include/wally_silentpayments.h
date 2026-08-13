@@ -249,6 +249,66 @@ WALLY_CORE_API int wally_psbt_get_sp_musig_status(
     uint32_t flags,
     size_t *written);
 
+/** Return the stable digest binding a two-round aggregate silent-payment session.
+ *
+ * The digest commits to the transaction version, inputs, calculated locktime,
+ * output amounts and recipients. For a silent-payment output its 66-byte
+ * ``PSBT_OUT_SP_V0_INFO`` replaces the not-yet-known script, so the digest is
+ * unchanged when round 1 resolves that output.
+ * FIXED_SIZED_OUTPUT(len, bytes_out, SHA256_LEN)
+ */
+WALLY_CORE_API int wally_psbt_get_sp_musig_session_digest(
+    const struct wally_psbt *psbt,
+    unsigned char *bytes_out,
+    size_t len);
+
+/** Contribute aggregate silent-payment shares and MuSig2 public nonces.
+ *
+ * ``entropy`` must contain 32 bytes used as the DLEQ-proof entropy seed,
+ * followed by one independent 32-byte MuSig2 session random value per
+ * aggregate input. Each session random value must be uniformly random, unique
+ * and never reused. On success ``secnonces_out`` receives one owned secret
+ * nonce per input and ``status_out`` is `WALLY_SP_INCOMPLETE` or
+ * `WALLY_SP_COMPLETE`. A complete result also resolves all silent-payment
+ * scripts and clears the PSBT input/output modifiable flags.
+ *
+ * The PSBT, ``secnonces_out`` and ``session_digest_out`` are unchanged on
+ * failure; ``status_out`` is set to `WALLY_SP_INVALID`.
+ * FIXED_SIZED_OUTPUT(digest_len, session_digest_out, SHA256_LEN)
+ */
+WALLY_CORE_API int wally_psbt_sp_musig_round1(
+    struct wally_psbt *psbt,
+    const struct wally_sp_musig_input *musig_inputs,
+    size_t num_musig_inputs,
+    const unsigned char *priv_keys,
+    size_t priv_keys_len,
+    const unsigned char *entropy,
+    size_t entropy_len,
+    uint32_t flags,
+    struct wally_musig_secnonce **secnonces_out,
+    unsigned char *session_digest_out,
+    size_t digest_len,
+    size_t *status_out);
+
+/** Verify and sign round 2 of an aggregate silent-payment session.
+ *
+ * The supplied digest must match the PSBT, every share and proof must be
+ * present and valid, every resolved output must re-derive identically, and the
+ * transaction's global tx-modifiable flags must all be zero. Signing consumes
+ * the secret nonces. If any signing operation fails, callers must discard
+ * every nonce in the session even though the PSBT itself remains unchanged.
+ */
+WALLY_CORE_API int wally_psbt_sp_musig_round2(
+    struct wally_psbt *psbt,
+    const struct wally_sp_musig_input *musig_inputs,
+    size_t num_musig_inputs,
+    const unsigned char *priv_keys,
+    size_t priv_keys_len,
+    struct wally_musig_secnonce **secnonces,
+    const unsigned char *session_digest,
+    size_t digest_len,
+    uint32_t flags);
+
 /**
  * Resolve a PSBT's silent payment outputs from the shares it already carries.
  *

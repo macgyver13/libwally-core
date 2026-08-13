@@ -437,6 +437,7 @@ export function psbt_get_output_value_commitment_len(psbt: Ref_wally_psbt, index
 export function psbt_get_output_value_rangeproof_len(psbt: Ref_wally_psbt, index: number): number;
 export function psbt_get_output_witness_script_len(psbt: Ref_wally_psbt, index: number): number;
 export function psbt_get_pset_modifiable_flags(psbt: Ref_wally_psbt): number;
+export function psbt_get_sp_musig_session_digest(psbt: Ref_wally_psbt): Buffer;
 export function psbt_get_sp_musig_status(psbt: Ref_wally_psbt, musig_inputs: Ref_wally_sp_musig_input, num_musig_inputs: number, flags: number): number;
 export function psbt_get_sp_smallest_outpoint(psbt: Ref_wally_psbt): Buffer;
 export function psbt_get_sp_status(psbt: Ref_wally_psbt, flags: number): number;
@@ -555,6 +556,9 @@ export function psbt_is_elements(psbt: Ref_wally_psbt): number;
 export function psbt_is_finalized(psbt: Ref_wally_psbt): number;
 export function psbt_is_input_finalized(psbt: Ref_wally_psbt, index: number): number;
 export function psbt_musig2_add_nonce(psbt: Ref_wally_psbt, index: number, session_secrand32: Buffer|Uint8Array|null, seckey: Buffer|Uint8Array|null, pubkey33: Buffer|Uint8Array|null, agg_pubkey: Buffer|Uint8Array|null, leaf_hash: Buffer|Uint8Array|null, keyagg_cache: Ref_wally_musig_keyagg_cache, flags: number): Ref_wally_musig_secnonce;
+export function psbt_musig2_agg_then_derive_add_nonce(psbt: Ref_wally_psbt, index: number, session_secrand32: Buffer|Uint8Array|null, seckey: Buffer|Uint8Array|null, pubkey33: Buffer|Uint8Array|null, agg_pubkey: Buffer|Uint8Array|null, path: Uint32Array|number[], msg32: Buffer|Uint8Array|null, flags: number): Ref_wally_musig_secnonce;
+export function psbt_musig2_agg_then_derive_finalize_input(psbt: Ref_wally_psbt, index: number, agg_pubkey: Buffer|Uint8Array|null, path: Uint32Array|number[], flags: number): void;
+export function psbt_musig2_agg_then_derive_sign(psbt: Ref_wally_psbt, index: number, secnonce: Ref_wally_musig_secnonce, seckey: Buffer|Uint8Array|null, pubkey33: Buffer|Uint8Array|null, agg_pubkey: Buffer|Uint8Array|null, path: Uint32Array|number[], flags: number): Ref_wally_musig_partial_sig;
 export function psbt_musig2_finalize_input(psbt: Ref_wally_psbt, index: number, agg_pubkey: Buffer|Uint8Array|null, leaf_hash: Buffer|Uint8Array|null, keyagg_cache: Ref_wally_musig_keyagg_cache, flags: number): void;
 export function psbt_musig2_sign(psbt: Ref_wally_psbt, index: number, secnonce: Ref_wally_musig_secnonce, seckey: Buffer|Uint8Array|null, pubkey33: Buffer|Uint8Array|null, agg_pubkey: Buffer|Uint8Array|null, leaf_hash: Buffer|Uint8Array|null, keyagg_cache: Ref_wally_musig_keyagg_cache, flags: number): Ref_wally_musig_partial_sig;
 export function psbt_output_add_musig2_participant_pubkeys(output: Ref_wally_psbt_output, agg_pubkey: Buffer|Uint8Array|null, participants: Buffer|Uint8Array|null): void;
@@ -679,6 +683,8 @@ export function psbt_signing_cache_enable(psbt: Ref_wally_psbt, flags: number): 
 export function psbt_sp_contribute(psbt: Ref_wally_psbt, indices: Uint32Array|number[], priv_keys: Buffer|Uint8Array|null, entropy: Buffer|Uint8Array|null, flags: number): void;
 export function psbt_sp_musig_contribute(psbt: Ref_wally_psbt, musig_inputs: Ref_wally_sp_musig_input, num_musig_inputs: number, priv_keys: Buffer|Uint8Array|null, entropy: Buffer|Uint8Array|null, flags: number): void;
 export function psbt_sp_musig_resolve_shares(psbt: Ref_wally_psbt, musig_inputs: Ref_wally_sp_musig_input, num_musig_inputs: number, flags: number): void;
+export function psbt_sp_musig_round1(psbt: Ref_wally_psbt, musig_inputs: Ref_wally_sp_musig_input, num_musig_inputs: number, priv_keys: Buffer|Uint8Array|null, entropy: Buffer|Uint8Array|null, flags: number): [secnonces_out: Ref_wally_musig_secnonce, session_digest_out: Buffer, status_out: number];
+export function psbt_sp_musig_round2(psbt: Ref_wally_psbt, musig_inputs: Ref_wally_sp_musig_input, num_musig_inputs: number, priv_keys: Buffer|Uint8Array|null, session_digest: Buffer|Uint8Array|null, flags: number): Ref_wally_musig_secnonce;
 export function psbt_sp_resolve(psbt: Ref_wally_psbt, priv_keys: Buffer|Uint8Array|null, entropy: Buffer|Uint8Array|null, flags: number): void;
 export function psbt_sp_resolve_shares(psbt: Ref_wally_psbt, flags: number): void;
 export function psbt_to_base64(psbt: Ref_wally_psbt, flags: number): string;
