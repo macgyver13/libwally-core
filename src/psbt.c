@@ -2776,7 +2776,7 @@ static int pull_psbt_input(const struct wally_psbt *psbt,
         uint64_t field_type = pull_field_type(cursor, max, &key, &key_len, is_pset, &is_pset_ft);
         const uint64_t raw_field_type = field_type;
         uint64_t field_bit = 0;
-        bool is_known;
+        bool is_known, has_keydata;
 
         if (is_pset_ft) {
             is_known = field_type <= PSET_IN_MAX;
@@ -2784,11 +2784,23 @@ static int pull_psbt_input(const struct wally_psbt *psbt,
                 field_type = PSET_FT(field_type);
                 field_bit = field_type;
             }
+            has_keydata = !!(field_bit & PSBT_IN_HAVE_KEYDATA);
         } else {
+            /* Field types at or above PSBT_FT_LIMIT get no bit of their own,
+             * since PSBT_FT() would alias a PSET field. They are repeatable
+             * and carry keydata, and their version rule is applied here
+             * rather than through the mandatory/disallowed masks.
+             */
+            const bool is_high_ft = field_type >= PSBT_FT_LIMIT;
             is_known = field_type <= PSBT_IN_MAX &&
                        field_type != PSBT_IN_RESERVED_0X19;
-            if (is_known)
+            if (is_known && is_high_ft && psbt->version == PSBT_0) {
+                ret = WALLY_EINVAL; /* Aggregate input SP fields are v2 only */
+                break;
+            }
+            if (is_known && !is_high_ft)
                 field_bit = PSBT_FT(field_type);
+            has_keydata = is_high_ft || !!(field_bit & PSBT_IN_HAVE_KEYDATA);
         }
 
         /* Process based on type */
@@ -2798,7 +2810,7 @@ static int pull_psbt_input(const struct wally_psbt *psbt,
                 break;
             }
             keyset |= field_bit;
-            if (field_bit & PSBT_IN_HAVE_KEYDATA)
+            if (has_keydata)
                 pull_subfield_end(cursor, max, key, key_len);
             else
                 subfield_nomore_end(cursor, max, key, key_len);
