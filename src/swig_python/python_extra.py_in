@@ -239,6 +239,7 @@ psbt_get_output_sp_v0_label = _wrap_bin(psbt_get_output_sp_v0_label, psbt_get_ou
 psbt_get_output_taproot_internal_key = _wrap_bin(psbt_get_output_taproot_internal_key, psbt_get_output_taproot_internal_key_len)
 psbt_get_output_unknown = _wrap_bin(psbt_get_output_unknown, psbt_get_output_unknown_len)
 psbt_get_output_witness_script = _wrap_bin(psbt_get_output_witness_script, psbt_get_output_witness_script_len)
+psbt_get_sp_musig_session_digest = _wrap_bin(psbt_get_sp_musig_session_digest, SHA256_LEN)
 psbt_get_sp_smallest_outpoint = _wrap_bin(psbt_get_sp_smallest_outpoint, WALLY_SP_OUTPOINT_LEN)
 psbt_init = psbt_init_alloc
 psbt_to_bytes = _wrap_bin(psbt_to_bytes, psbt_get_length)
