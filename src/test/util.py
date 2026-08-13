@@ -157,6 +157,8 @@ class wally_psbt_input(Structure):
                 ('musig2_partial_sigs', wally_map),
                 ('sp_ecdh_shares', wally_map),
                 ('sp_dleq_proofs', wally_map),
+                ('sp_partial_ecdh_shares', wally_map),
+                ('sp_partial_dleq_proofs', wally_map),
                 ('issuance_amount', c_uint64),
                 ('inflation_keys', c_uint64),
                 ('pegin_amount', c_uint64),
@@ -165,6 +167,13 @@ class wally_psbt_input(Structure):
                 ('pset_fields', wally_map),
                 ('amount', c_uint64),
                 ('has_amount', c_uint32)]
+
+class wally_sp_musig_input(Structure):
+    _fields_ = [('index', c_size_t),
+                ('pub_keys', c_void_p),
+                ('pub_keys_len', c_size_t),
+                ('path', c_void_p),
+                ('path_len', c_size_t)]
 
 class wally_psbt_output(Structure):
     _fields_ = [('keypaths', wally_map),
@@ -644,6 +653,10 @@ for f in (
     ('wally_psbt_input_set_signatures', c_int, [POINTER(wally_psbt_input), POINTER(wally_map)]),
     ('wally_psbt_input_set_sp_dleq_proof', c_int, [POINTER(wally_psbt_input), c_void_p, c_size_t, c_void_p, c_size_t]),
     ('wally_psbt_input_set_sp_ecdh_share', c_int, [POINTER(wally_psbt_input), c_void_p, c_size_t, c_void_p, c_size_t]),
+    ('wally_psbt_input_set_sp_partial_dleq_proof', c_int, [POINTER(wally_psbt_input), c_void_p, c_size_t, c_void_p, c_size_t, c_void_p, c_size_t]),
+    ('wally_psbt_input_set_sp_partial_ecdh_share', c_int, [POINTER(wally_psbt_input), c_void_p, c_size_t, c_void_p, c_size_t, c_void_p, c_size_t]),
+    ('wally_psbt_input_find_sp_partial_dleq_proof', c_int, [POINTER(wally_psbt_input), c_void_p, c_size_t, c_void_p, c_size_t, c_size_t_p]),
+    ('wally_psbt_input_find_sp_partial_ecdh_share', c_int, [POINTER(wally_psbt_input), c_void_p, c_size_t, c_void_p, c_size_t, c_size_t_p]),
     ('wally_psbt_input_set_taproot_internal_key', c_int, [POINTER(wally_psbt_input), c_void_p, c_size_t]),
     ('wally_psbt_input_set_taproot_signature', c_int, [POINTER(wally_psbt_input), c_void_p, c_size_t]),
     ('wally_psbt_input_set_unknowns', c_int, [POINTER(wally_psbt_input), POINTER(wally_map)]),
@@ -733,6 +746,9 @@ for f in (
     ('wally_psbt_signing_cache_disable', c_int, [POINTER(wally_psbt)]),
     ('wally_psbt_signing_cache_enable', c_int, [POINTER(wally_psbt), c_uint32]),
     ('wally_psbt_sp_contribute', c_int, [POINTER(wally_psbt), c_void_p, c_size_t, c_void_p, c_size_t, c_void_p, c_size_t, c_uint32]),
+    ('wally_psbt_sp_musig_contribute', c_int, [POINTER(wally_psbt), c_void_p, c_size_t, c_void_p, c_size_t, c_void_p, c_size_t, c_uint32]),
+    ('wally_psbt_sp_musig_resolve_shares', c_int, [POINTER(wally_psbt), c_void_p, c_size_t, c_uint32]),
+    ('wally_psbt_get_sp_musig_status', c_int, [POINTER(wally_psbt), c_void_p, c_size_t, c_uint32, c_size_t_p]),
     ('wally_psbt_sp_resolve', c_int, [POINTER(wally_psbt), c_void_p, c_size_t, c_void_p, c_size_t, c_uint32]),
     ('wally_psbt_sp_resolve_shares', c_int, [POINTER(wally_psbt), c_uint32]),
     ('wally_psbt_to_base64', c_int, [POINTER(wally_psbt), c_uint32, c_char_p_p]),
