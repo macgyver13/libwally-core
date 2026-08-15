@@ -283,6 +283,7 @@ export function pbkdf2_hmac_sha512(pass: Buffer|Uint8Array|null, salt: Buffer|Ui
 export function psbt_add_global_scalar(psbt: Ref_wally_psbt, scalar: Buffer|Uint8Array|null): void;
 export function psbt_add_input_keypath(psbt: Ref_wally_psbt, index: number, pub_key: Buffer|Uint8Array|null, fingerprint: Buffer|Uint8Array|null, child_path: Uint32Array|number[]): void;
 export function psbt_add_input_signature(psbt: Ref_wally_psbt, index: number, pub_key: Buffer|Uint8Array|null, sig: Buffer|Uint8Array|null): void;
+export function psbt_add_input_sp_spend_keypath(psbt: Ref_wally_psbt, index: number, pub_key: Buffer|Uint8Array|null, fingerprint: Buffer|Uint8Array|null, child_path: Uint32Array|number[]): void;
 export function psbt_add_input_taproot_keypath(psbt: Ref_wally_psbt, index: number, flags: number, pub_key: Buffer|Uint8Array|null, tapleaf_hashes: Buffer|Uint8Array|null, fingerprint: Buffer|Uint8Array|null, child_path: Uint32Array|number[]): void;
 export function psbt_add_output_keypath(psbt: Ref_wally_psbt, index: number, pub_key: Buffer|Uint8Array|null, fingerprint: Buffer|Uint8Array|null, child_path: Uint32Array|number[]): void;
 export function psbt_add_output_taproot_keypath(psbt: Ref_wally_psbt, index: number, flags: number, pub_key: Buffer|Uint8Array|null, tapleaf_hashes: Buffer|Uint8Array|null, fingerprint: Buffer|Uint8Array|null, child_path: Uint32Array|number[]): void;
@@ -309,6 +310,7 @@ export function psbt_clear_input_pegin_txout_proof(psbt: Ref_wally_psbt, index: 
 export function psbt_clear_input_required_lockheight(psbt: Ref_wally_psbt, index: number): void;
 export function psbt_clear_input_required_locktime(psbt: Ref_wally_psbt, index: number): void;
 export function psbt_clear_input_sequence(psbt: Ref_wally_psbt, index: number): void;
+export function psbt_clear_input_sp_tweak(psbt: Ref_wally_psbt, index: number): void;
 export function psbt_clear_input_utxo_rangeproof(psbt: Ref_wally_psbt, index: number): void;
 export function psbt_clear_output_amount(psbt: Ref_wally_psbt, index: number): void;
 export function psbt_clear_output_asset(psbt: Ref_wally_psbt, index: number): void;
@@ -336,6 +338,7 @@ export function psbt_find_input_keypath(psbt: Ref_wally_psbt, index: number, key
 export function psbt_find_input_signature(psbt: Ref_wally_psbt, index: number, pub_key: Buffer|Uint8Array|null): number;
 export function psbt_find_input_sp_dleq_proof(psbt: Ref_wally_psbt, index: number, key: Buffer|Uint8Array|null): number;
 export function psbt_find_input_sp_ecdh_share(psbt: Ref_wally_psbt, index: number, key: Buffer|Uint8Array|null): number;
+export function psbt_find_input_sp_spend_keypath(psbt: Ref_wally_psbt, index: number, key: Buffer|Uint8Array|null): number;
 export function psbt_find_input_spending_utxo(psbt: Ref_wally_psbt, txhash: Buffer|Uint8Array|null, utxo_index: number): number;
 export function psbt_find_input_unknown(psbt: Ref_wally_psbt, index: number, key: Buffer|Uint8Array|null): number;
 export function psbt_find_output_keypath(psbt: Ref_wally_psbt, index: number, key: Buffer|Uint8Array|null): number;
@@ -395,6 +398,9 @@ export function psbt_get_input_sp_dleq_proofs_size(psbt: Ref_wally_psbt, index: 
 export function psbt_get_input_sp_ecdh_share_len(psbt: Ref_wally_psbt, index: number, subindex: number): number;
 export function psbt_get_input_sp_ecdh_shares_size(psbt: Ref_wally_psbt, index: number): number;
 export function psbt_get_input_sp_eligible(psbt: Ref_wally_psbt, index: number): number;
+export function psbt_get_input_sp_spend_keypath_len(psbt: Ref_wally_psbt, index: number, subindex: number): number;
+export function psbt_get_input_sp_spend_keypaths_size(psbt: Ref_wally_psbt, index: number): number;
+export function psbt_get_input_sp_tweak_len(psbt: Ref_wally_psbt, index: number): number;
 export function psbt_get_input_taproot_internal_key_len(psbt: Ref_wally_psbt, index: number): number;
 export function psbt_get_input_taproot_signature_len(psbt: Ref_wally_psbt, index: number): number;
 export function psbt_get_input_unknown_len(psbt: Ref_wally_psbt, index: number, subindex: number): number;
@@ -537,6 +543,7 @@ export function psbt_input_set_utxo_rangeproof(input: Ref_wally_psbt_input, rang
 export function psbt_input_set_witness_script(input: Ref_wally_psbt_input, script: Buffer|Uint8Array|null): void;
 export function psbt_input_set_witness_utxo(input: Ref_wally_psbt_input, witness_utxo: Ref_wally_tx_output): void;
 export function psbt_input_set_witness_utxo_from_tx(input: Ref_wally_psbt_input, utxo: Ref_wally_tx, index: number): void;
+export function psbt_input_sp_spend_keypath_add(input: Ref_wally_psbt_input, pub_key: Buffer|Uint8Array|null, fingerprint: Buffer|Uint8Array|null, child_path: Uint32Array|number[]): void;
 export function psbt_input_taproot_keypath_add(input: Ref_wally_psbt_input, pub_key: Buffer|Uint8Array|null, tapleaf_hashes: Buffer|Uint8Array|null, fingerprint: Buffer|Uint8Array|null, child_path: Uint32Array|number[]): void;
 export function psbt_is_elements(psbt: Ref_wally_psbt): number;
 export function psbt_is_finalized(psbt: Ref_wally_psbt): number;
@@ -626,6 +633,7 @@ export function psbt_set_input_required_locktime(psbt: Ref_wally_psbt, index: nu
 export function psbt_set_input_sequence(psbt: Ref_wally_psbt, index: number, sequence: number): void;
 export function psbt_set_input_sighash(psbt: Ref_wally_psbt, index: number, sighash: number): void;
 export function psbt_set_input_signatures(psbt: Ref_wally_psbt, index: number, map_in: Ref_wally_map): void;
+export function psbt_set_input_sp_tweak(psbt: Ref_wally_psbt, index: number, tweak: Buffer|Uint8Array|null): void;
 export function psbt_set_input_taproot_internal_key(psbt: Ref_wally_psbt, index: number, pub_key: Buffer|Uint8Array|null): void;
 export function psbt_set_input_taproot_signature(psbt: Ref_wally_psbt, index: number, sig: Buffer|Uint8Array|null): void;
 export function psbt_set_input_unknowns(psbt: Ref_wally_psbt, index: number, map_in: Ref_wally_map): void;
@@ -895,6 +903,8 @@ export function psbt_get_input_signature(psbt: Ref_wally_psbt, index: number, su
 export function psbt_get_input_signing_script(psbt: Ref_wally_psbt, index: number): Buffer;
 export function psbt_get_input_sp_dleq_proof(psbt: Ref_wally_psbt, index: number, subindex: number): Buffer;
 export function psbt_get_input_sp_ecdh_share(psbt: Ref_wally_psbt, index: number, subindex: number): Buffer;
+export function psbt_get_input_sp_spend_keypath(psbt: Ref_wally_psbt, index: number, subindex: number): Buffer;
+export function psbt_get_input_sp_tweak(psbt: Ref_wally_psbt, index: number): Buffer;
 export function psbt_get_input_taproot_internal_key(psbt: Ref_wally_psbt, index: number): Buffer;
 export function psbt_get_input_taproot_signature(psbt: Ref_wally_psbt, index: number): Buffer;
 export function psbt_get_input_unknown(psbt: Ref_wally_psbt, index: number, subindex: number): Buffer;
