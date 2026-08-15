@@ -5033,6 +5033,12 @@ int wally_psbt_get_input_bip32_key_from_alloc(const struct wally_psbt *psbt,
         /* We don't have a taproot signature, so try matching the taproot key */
         ret = wally_map_keypath_get_bip32_key_from_alloc(&inp->taproot_leaf_paths,
                                                          subindex, hdkey, output);
+        if (ret == WALLY_OK && !*output) {
+            /* A BIP376 silent payment input identifies its key by the spend
+             * key that the tweak applies to, not by a taproot keypath */
+            ret = wally_map_keypath_get_bip32_key_from_alloc(&inp->sp_spend_keypaths,
+                                                             subindex, hdkey, output);
+        }
     }
     return ret;
 }
@@ -5459,6 +5465,62 @@ done:
     return ret;
 }
 
+int wally_psbt_get_input_sp_spend_key(const struct wally_psbt *psbt, size_t index,
+                                      const struct ext_key *hdkey,
+                                      unsigned char *bytes_out, size_t len)
+{
+    unsigned char pubkey[EC_PUBLIC_KEY_LEN];
+    const struct wally_tx_output *utxo = NULL;
+    const struct wally_map_item *tweak;
+    struct wally_psbt_input *inp = psbt_get_input(psbt, index);
+    size_t script_type = WALLY_SCRIPT_TYPE_UNKNOWN, pubkey_idx;
+    int ret;
+
+    if (!inp || !hdkey || hdkey->priv_key[0] != BIP32_FLAG_KEY_PRIVATE ||
+        !bytes_out || len != EC_PRIVATE_KEY_LEN)
+        return WALLY_EINVAL;
+
+    tweak = wally_map_get_integer(&inp->psbt_fields, PSBT_IN_SP_TWEAK);
+    if (!tweak)
+        return WALLY_EINVAL; /* Not a silent payment input */
+
+    /* BIP376 has the Updater identify the spend key, so that a signer knows
+     * which of its keys the tweak belongs to */
+    ret = wally_map_find_bip32_public_key_from(&inp->sp_spend_keypaths, 0,
+                                               hdkey, &pubkey_idx);
+    if (ret != WALLY_OK || !pubkey_idx)
+        return WALLY_EINVAL; /* Spend key not found */
+
+    /* d = (b_spend + tweak) mod n */
+    ret = wally_ec_scalar_add(hdkey->priv_key + 1, EC_PRIVATE_KEY_LEN,
+                              tweak->value, tweak->value_len, bytes_out, len);
+    if (ret != WALLY_OK)
+        return ret;
+
+    /* BIP376 requires the signer to fail unless x(d.G) is the output key P,
+     * since the tweak comes from the Updater and may be wrong through error
+     * or malice. Note the BIP words this as negating d when d.G has an odd y
+     * coordinate: BIP340 signing negates internally, and comparing x
+     * coordinates ignores the parity, so there is nothing to negate here.
+     */
+    ret = wally_psbt_get_input_best_utxo(psbt, index, &utxo);
+    if (ret == WALLY_OK)
+        ret = wally_scriptpubkey_get_type(utxo->script, utxo->script_len,
+                                          &script_type);
+    if (ret == WALLY_OK)
+        ret = wally_ec_public_key_from_private_key(bytes_out, len,
+                                                   pubkey, sizeof(pubkey));
+    if (ret == WALLY_OK &&
+        (script_type != WALLY_SCRIPT_TYPE_P2TR ||
+         memcmp(utxo->script + 2, pubkey + 1, EC_XONLY_PUBLIC_KEY_LEN)))
+        ret = WALLY_EINVAL; /* The tweak does not give the outputs spend key */
+
+    wally_clear(pubkey, sizeof(pubkey));
+    if (ret != WALLY_OK)
+        wally_clear(bytes_out, len);
+    return ret;
+}
+
 int wally_psbt_sign_input_bip32(struct wally_psbt *psbt,
                                 size_t index, size_t subindex,
                                 const unsigned char *txhash, size_t txhash_len,
@@ -5471,43 +5533,60 @@ int wally_psbt_sign_input_bip32(struct wally_psbt *psbt,
     uint32_t sighash, sighash_type;
     struct wally_psbt_input *inp = psbt_get_input_signature_type(psbt, index, &sighash_type);
     const bool is_taproot = sighash_type == WALLY_SIGTYPE_SW_V1;
+    bool is_sp;
     int ret;
 
     if (!inp || !hdkey || hdkey->priv_key[0] != BIP32_FLAG_KEY_PRIVATE ||
         (flags & ~(EC_FLAG_GRIND_R|EC_FLAG_ELEMENTS)))
         return WALLY_EINVAL;
 
-    /* Find the public key this signature is for */
-    if (is_taproot)
-        ret = wally_map_find_bip32_public_key_from(&inp->taproot_leaf_hashes,
-                                                   subindex, hdkey,
-                                                   &pubkey_idx);
-    else
-        ret = wally_map_find_bip32_public_key_from(&inp->keypaths,
-                                                   subindex, hdkey,
-                                                   &pubkey_idx);
-    if (ret != WALLY_OK || !pubkey_idx)
-        return WALLY_EINVAL; /* Signing pubkey key not found */
+    /* A BIP376 silent payment input is identified by its tweak. Its signing
+     * key comes from the spend keypaths, since such an input has no taproot
+     * keypath to find a key through */
+    is_sp = !!wally_map_get_integer(&inp->psbt_fields, PSBT_IN_SP_TWEAK);
 
-    if (!is_taproot) {
-        /* ECDSA: Use untweaked private key. Only grinding flag is relevant */
-        memcpy(signing_key, hdkey->priv_key + 1, EC_PRIVATE_KEY_LEN);
-        flags = EC_FLAG_ECDSA | (flags & EC_FLAG_GRIND_R);
-    } else {
-        /* Schnorr BIP340: Tweak the private key */
-        const struct wally_map_item *p = wally_map_get_integer(&inp->psbt_fields,
-                                                               PSBT_IN_TAP_MERKLE_ROOT);
-        const unsigned char *merkle_root = p ? p->value : NULL;
-        const size_t merkle_root_len = p ? p->value_len : 0;
-
-        ret = wally_ec_private_key_bip341_tweak(hdkey->priv_key + 1, EC_PRIVATE_KEY_LEN,
-                                                merkle_root, merkle_root_len,
-                                                flags & EC_FLAG_ELEMENTS,
+    if (is_sp) {
+        if (!is_taproot)
+            return WALLY_EINVAL; /* Silent payment outputs are always p2tr */
+        ret = wally_psbt_get_input_sp_spend_key(psbt, index, hdkey,
                                                 signing_key, sizeof(signing_key));
         if (ret != WALLY_OK)
-            goto done;
-        /* Only Elements flag is relevant */
+            return ret;
+        /* Only the Elements flag is relevant */
         flags = EC_FLAG_SCHNORR | (flags & EC_FLAG_ELEMENTS);
+    } else {
+        /* Find the public key this signature is for */
+        if (is_taproot)
+            ret = wally_map_find_bip32_public_key_from(&inp->taproot_leaf_hashes,
+                                                       subindex, hdkey,
+                                                       &pubkey_idx);
+        else
+            ret = wally_map_find_bip32_public_key_from(&inp->keypaths,
+                                                       subindex, hdkey,
+                                                       &pubkey_idx);
+        if (ret != WALLY_OK || !pubkey_idx)
+            return WALLY_EINVAL; /* Signing pubkey key not found */
+
+        if (!is_taproot) {
+            /* ECDSA: Use untweaked private key. Only grinding flag is relevant */
+            memcpy(signing_key, hdkey->priv_key + 1, EC_PRIVATE_KEY_LEN);
+            flags = EC_FLAG_ECDSA | (flags & EC_FLAG_GRIND_R);
+        } else {
+            /* Schnorr BIP340: Tweak the private key */
+            const struct wally_map_item *p = wally_map_get_integer(&inp->psbt_fields,
+                                                                   PSBT_IN_TAP_MERKLE_ROOT);
+            const unsigned char *merkle_root = p ? p->value : NULL;
+            const size_t merkle_root_len = p ? p->value_len : 0;
+
+            ret = wally_ec_private_key_bip341_tweak(hdkey->priv_key + 1, EC_PRIVATE_KEY_LEN,
+                                                    merkle_root, merkle_root_len,
+                                                    flags & EC_FLAG_ELEMENTS,
+                                                    signing_key, sizeof(signing_key));
+            if (ret != WALLY_OK)
+                goto done;
+            /* Only Elements flag is relevant */
+            flags = EC_FLAG_SCHNORR | (flags & EC_FLAG_ELEMENTS);
+        }
     }
 
     sighash = inp->sighash;
