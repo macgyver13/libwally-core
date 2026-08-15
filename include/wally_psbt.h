@@ -2822,6 +2822,9 @@ WALLY_CORE_API int wally_psbt_sign_bip32(
  * :param hdkey: The derived extended key to sign with.
  * :param flags: Flags controlling signing. Must be 0 or `EC_FLAG_GRIND_R`,
  *|    logical or-d with `EC_FLAG_ELEMENTS` if ``psbt`` is a PSET.
+ *
+ * .. note:: An input with a `PSBT_IN_SP_TWEAK` field is signed as a BIP376
+ *|    silent payment spend; see `wally_psbt_get_input_sp_spend_key`.
  */
 WALLY_CORE_API int wally_psbt_sign_input_bip32(
     struct wally_psbt *psbt,
@@ -2831,6 +2834,32 @@ WALLY_CORE_API int wally_psbt_sign_input_bip32(
     size_t txhash_len,
     const struct ext_key *hdkey,
     uint32_t flags);
+
+/**
+ * Get the private key to sign a BIP376 silent payment input with.
+ *
+ * :param psbt: The PSBT containing the input to get the signing key for.
+ * :param index: The zero-based index of the input in the PSBT.
+ * :param hdkey: The derived extended key holding the silent payment spend key.
+ * :param bytes_out: Destination for the signing key.
+ * FIXED_SIZED_OUTPUT(len, bytes_out, EC_PRIVATE_KEY_LEN)
+ *
+ * The key returned is the input's spend key plus its silent payment tweak.
+ * The input must hold both a silent payment tweak and a spend keypath
+ * matching ``hdkey``, and its witness utxo must be the p2tr output that the
+ * tweaked key unlocks; anything else returns ``WALLY_EINVAL``.
+ *
+ * .. note:: Verifying the tweaked key against the output being spent is
+ *|    required by BIP376: the tweak is given by the Updater, and signing
+ *|    with an incorrect one produces a valid signature for a key the signer
+ *|    does not control.
+ */
+WALLY_CORE_API int wally_psbt_get_input_sp_spend_key(
+    const struct wally_psbt *psbt,
+    size_t index,
+    const struct ext_key *hdkey,
+    unsigned char *bytes_out,
+    size_t len);
 
 /**
  * Finalize a PSBT.

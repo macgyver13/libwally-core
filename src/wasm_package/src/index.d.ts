@@ -354,6 +354,7 @@ export function psbt_get_input_sp_dleq_proofs_size(psbt: Ref_wally_psbt, index: 
 export function psbt_get_input_sp_ecdh_share_len(psbt: Ref_wally_psbt, index: number, subindex: number): number;
 export function psbt_get_input_sp_ecdh_shares_size(psbt: Ref_wally_psbt, index: number): number;
 export function psbt_get_input_sp_eligible(psbt: Ref_wally_psbt, index: number): number;
+export function psbt_get_input_sp_spend_key(psbt: Ref_wally_psbt, index: number, hdkey: Ref_ext_key): Buffer;
 export function psbt_get_input_sp_spend_keypath_len(psbt: Ref_wally_psbt, index: number, subindex: number): number;
 export function psbt_get_input_sp_spend_keypaths_size(psbt: Ref_wally_psbt, index: number): number;
 export function psbt_get_input_sp_tweak_len(psbt: Ref_wally_psbt, index: number): number;
