@@ -728,6 +728,7 @@ for f in (
     ('wally_psbt_set_version', c_int, [POINTER(wally_psbt), c_uint32, c_uint32]),
     ('wally_psbt_sign', c_int, [POINTER(wally_psbt), c_void_p, c_size_t, c_uint32]),
     ('wally_psbt_sign_bip32', c_int, [POINTER(wally_psbt), POINTER(ext_key), c_uint32]),
+    ('wally_psbt_get_input_sp_spend_key', c_int, [POINTER(wally_psbt), c_size_t, POINTER(ext_key), c_void_p, c_size_t]),
     ('wally_psbt_sign_input_bip32', c_int, [POINTER(wally_psbt), c_size_t, c_size_t, c_void_p, c_size_t, POINTER(ext_key), c_uint32]),
     ('wally_psbt_signing_cache_disable', c_int, [POINTER(wally_psbt)]),
     ('wally_psbt_signing_cache_enable', c_int, [POINTER(wally_psbt), c_uint32]),

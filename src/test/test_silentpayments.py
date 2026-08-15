@@ -12,6 +12,9 @@ RECIPIENT = BIP352_JSON[0]['sending'][0]['given']['recipients'][0]
 
 ENTROPY = '00' * 32
 NUMS = '50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0'
+BIP32_VER_MAIN_PRIVATE = 0x0488ADE4
+EC_FLAG_SCHNORR = 0x2
+WALLY_PSBT_EXTRACT_NON_FINAL = 0x1
 
 # BIP-376: an arbitrary tweak, and the x-only output key of the input it spends
 TWEAK = '77' * 32
@@ -397,6 +400,117 @@ class SilentPaymentsTests(unittest.TestCase):
         self.assertEqual(self.parse(v0)[0], WALLY_OK)
         for kv in [SP_TWEAK_KV, SP_SPEND_KV]:
             self.assertEqual(self.parse(v0[:-2] + kv + v0[-2:])[0], WALLY_EINVAL)
+
+    def build_sp_spend(self, tweak_hex=TWEAK, spend_key=True, anonymous=False):
+        """Build a signable BIP-376 spend, and return it with its signing key.
+
+        The wallet holds the spend key b_spend; the input it spends is locked
+        by x(d.G), where d = b_spend + tweak, as BIP-352 receiving produces.
+        """
+        seed, seed_len = make_cbuffer('00' * 32)
+        master = ext_key()
+        self.assertEqual(bip32_key_from_seed(seed, seed_len, BIP32_VER_MAIN_PRIVATE,
+                                             0, byref(master)), WALLY_OK)
+        b_spend = bytes(bytearray(master.priv_key)[1:])
+        tweak, tweak_len = make_cbuffer(tweak_hex)
+        d, d_len = make_cbuffer('00' * 32)
+        self.assertEqual(wally_ec_scalar_add(b_spend, 32, tweak, tweak_len,
+                                             d, d_len), WALLY_OK)
+        output_key, output_key_len = make_cbuffer('00' * 33)
+        self.assertEqual(wally_ec_public_key_from_private_key(d, d_len, output_key,
+                                                              output_key_len), WALLY_OK)
+
+        psbt = pointer(wally_psbt())
+        self.assertEqual(wally_psbt_init_alloc(2, 1, 1, 0, 0, psbt), WALLY_OK)
+        txid, txid_len = make_cbuffer('5b' * 32)
+        tx_in = pointer(wally_tx_input())
+        self.assertEqual(wally_tx_input_init_alloc(txid, txid_len, 0, 0xffffffff,
+                                                   None, 0, None, tx_in), WALLY_OK)
+        self.assertEqual(wally_psbt_add_tx_input_at(psbt, 0, 0, tx_in), WALLY_OK)
+        spk, spk_len = make_cbuffer('5120' + h(output_key[1:]).decode('utf-8'))
+        utxo = pointer(wally_tx_output())
+        self.assertEqual(wally_tx_output_init_alloc(100000, spk, spk_len, utxo), WALLY_OK)
+        self.assertEqual(wally_psbt_set_input_witness_utxo(psbt, 0, utxo), WALLY_OK)
+        self.assertEqual(wally_psbt_set_input_sp_tweak(psbt, 0, tweak, tweak_len), WALLY_OK)
+        if spend_key:
+            key = bytes(bytearray(master.pub_key))
+            fingerprint, fingerprint_len = make_cbuffer('00' * 4)
+            if not anonymous:
+                self.assertEqual(bip32_key_get_fingerprint(byref(master), fingerprint,
+                                                           fingerprint_len), WALLY_OK)
+            self.assertEqual(wally_psbt_add_input_sp_spend_keypath(psbt, 0, key, 33,
+                                                                   fingerprint,
+                                                                   fingerprint_len,
+                                                                   None, 0), WALLY_OK)
+
+        tx_out = pointer(wally_tx_output())
+        self.assertEqual(wally_tx_output_init_alloc(90000, spk, spk_len, tx_out), WALLY_OK)
+        self.assertEqual(wally_psbt_add_tx_output_at(psbt, 0, 0, tx_out), WALLY_OK)
+        return psbt, master, bytes(bytearray(output_key)[1:])
+
+    def test_bip376_signing(self):
+        """Test signing a BIP-376 silent payment input"""
+        psbt, master, output_key = self.build_sp_spend()
+
+        # The signing key is the spend key plus the tweak, and its x-only
+        # public key must be the output key of the input being spent
+        d, d_len = make_cbuffer('00' * 32)
+        self.assertEqual(wally_psbt_get_input_sp_spend_key(psbt, 0, byref(master),
+                                                           d, d_len), WALLY_OK)
+        pubkey, pubkey_len = make_cbuffer('00' * 33)
+        self.assertEqual(wally_ec_public_key_from_private_key(d, d_len, pubkey,
+                                                              pubkey_len), WALLY_OK)
+        self.assertEqual(h(pubkey[1:]), h(output_key))
+
+        self.assertEqual(wally_psbt_sign_bip32(psbt, byref(master), 0), WALLY_OK)
+
+        # BIP-376 puts the signature in PSBT_IN_TAP_KEY_SIG, and it verifies
+        # against the output key with no further taproot tweaking
+        sig, sig_len = make_cbuffer('00' * 64)
+        ret, written = wally_psbt_get_input_taproot_signature(psbt, 0, sig, sig_len)
+        self.assertEqual((ret, written), (WALLY_OK, 64))
+        tx = POINTER(wally_tx)()
+        self.assertEqual(wally_psbt_extract(psbt, WALLY_PSBT_EXTRACT_NON_FINAL,
+                                            byref(tx)), WALLY_OK)
+        txhash, txhash_len = make_cbuffer('00' * 32)
+        self.assertEqual(wally_psbt_get_input_signature_hash(psbt, 0, tx, None, 0, 0,
+                                                             txhash, txhash_len), WALLY_OK)
+        self.assertEqual(wally_ec_sig_verify(output_key, 32, txhash, txhash_len,
+                                             EC_FLAG_SCHNORR, sig, sig_len), WALLY_OK)
+        wally_tx_free(tx)
+        wally_psbt_free(psbt)
+
+        # BIP-376 lets an Updater withhold the fingerprint and path. Signing
+        # the whole PSBT cannot then find the key, but a signer that knows
+        # its own spend key still can, since the field is keyed by that key
+        psbt, master, output_key = self.build_sp_spend(anonymous=True)
+        self.assertEqual(wally_psbt_get_input_sp_spend_key(psbt, 0, byref(master),
+                                                           d, d_len), WALLY_OK)
+        wally_psbt_free(psbt)
+
+    def test_bip376_signing_invalid(self):
+        """Test that a BIP-376 input is not signed without a verified key"""
+        # A tweak that does not produce the output key must not be signed
+        # with: it would be a valid signature for a key we do not control
+        psbt, master, output_key = self.build_sp_spend()
+        bad, bad_len = make_cbuffer('88' * 32)
+        self.assertEqual(wally_psbt_set_input_sp_tweak(psbt, 0, bad, bad_len), WALLY_OK)
+        d, d_len = make_cbuffer('00' * 32)
+        self.assertEqual(wally_psbt_get_input_sp_spend_key(psbt, 0, byref(master),
+                                                           d, d_len), WALLY_EINVAL)
+        self.assertEqual(h(d).decode('utf-8'), '00' * 32)  # Not left in the output
+        ret, written = wally_psbt_get_input_taproot_signature_len(psbt, 0)
+        self.assertEqual((ret, written), (WALLY_OK, 0))
+        wally_psbt_free(psbt)
+
+        # Without a spend keypath there is no key to apply the tweak to
+        psbt, master, output_key = self.build_sp_spend(spend_key=False)
+        self.assertEqual(wally_psbt_get_input_sp_spend_key(psbt, 0, byref(master),
+                                                           d, d_len), WALLY_EINVAL)
+        self.assertEqual(wally_psbt_sign_bip32(psbt, byref(master), 0), WALLY_OK)
+        ret, written = wally_psbt_get_input_taproot_signature_len(psbt, 0)
+        self.assertEqual((ret, written), (WALLY_OK, 0))
+        wally_psbt_free(psbt)
 
     def test_resolve_entropy(self):
         """Test that the entropy changes the proof, but not the payment"""
