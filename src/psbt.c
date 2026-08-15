@@ -6457,6 +6457,9 @@ done:
         wally_map_remove_integer(&input->psbt_fields, PSBT_IN_TAP_KEY_SIG);
         wally_map_remove_integer(&input->psbt_fields, PSBT_IN_TAP_INTERNAL_KEY);
         wally_map_remove_integer(&input->psbt_fields, PSBT_IN_TAP_MERKLE_ROOT);
+        /* BIP376 requires a finalizer to remove these once the witness exists */
+        wally_map_remove_integer(&input->psbt_fields, PSBT_IN_SP_TWEAK);
+        wally_map_clear(&input->sp_spend_keypaths);
         wally_map_clear(&input->keypaths);
         wally_map_clear(&input->signatures);
         wally_map_clear(&input->taproot_leaf_paths);
