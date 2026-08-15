@@ -1655,6 +1655,12 @@ inline int psbt_get_input_sp_eligible(const PSBT& psbt, size_t index, size_t* wr
     return detail::check_ret(__FUNCTION__, ret);
 }
 
+template <class PSBT, class HDKEY, class BYTES_OUT>
+inline int psbt_get_input_sp_spend_key(const PSBT& psbt, size_t index, const HDKEY& hdkey, BYTES_OUT& bytes_out) {
+    int ret = ::wally_psbt_get_input_sp_spend_key(detail::get_p(psbt), index, detail::get_p(hdkey), bytes_out.data(), bytes_out.size());
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
 template <class PSBT>
 inline int psbt_get_length(const PSBT& psbt, uint32_t flags, size_t* written) {
     int ret = ::wally_psbt_get_length(detail::get_p(psbt), flags, written);
