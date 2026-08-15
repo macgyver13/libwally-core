@@ -282,6 +282,7 @@ EXPORTED_FUNCTIONS="['_malloc','_free','_bip32_key_free' \
 ,'_wally_psbt_get_input_sp_ecdh_share_len' \
 ,'_wally_psbt_get_input_sp_ecdh_shares_size' \
 ,'_wally_psbt_get_input_sp_eligible' \
+,'_wally_psbt_get_input_sp_spend_key' \
 ,'_wally_psbt_get_input_sp_spend_keypath' \
 ,'_wally_psbt_get_input_sp_spend_keypath_len' \
 ,'_wally_psbt_get_input_sp_spend_keypaths_size' \
