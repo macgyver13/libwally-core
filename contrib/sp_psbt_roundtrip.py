@@ -10,6 +10,7 @@ Demonstrates a complete silent payment, sender and recipient:
   4. The PSBT is signed, finalized and extracted
   5. The recipient scans the extracted transaction and finds the payment
   6. The recipient verifies the DLEQ proof against the share
+  7. The recipient spends the payment, using the BIP-376 tweak it scanned
 
 Run from the repo root with:
   PYTHONPATH=src/test python3 contrib/sp_psbt_roundtrip.py
@@ -34,6 +35,9 @@ WALLY_SP_SCAN_KEY_LEN = 65      # BIP-392 spscan: scan privkey || spend pubkey
 WALLY_SP_OUTPOINT_LEN = 36
 
 WALLY_SIGHASH_ALL = 0x01
+BIP32_VER_MAIN_PRIVATE = 0x0488ADE4
+BIP32_KEY_FINGERPRINT_LEN = 4
+EC_SIGNATURE_LEN = 64
 WALLY_PSBT_VERSION_2 = 0x2
 WALLY_PSBT_EXTRACT_OPT_FINAL = 0x2
 WALLY_TX_FLAG_USE_WITNESS = 0x1
@@ -207,10 +211,11 @@ def read_global(psbt, field_name, find_fn, scan_pubkey):
 # Example keys only - never hardcode keys in production
 SENDER_PRIVKEYS = [bytes([0x11] * 32), bytes([0x22] * 32)]
 RECIPIENT_SCAN_PRIVKEY = bytes([0x33] * 32)
-RECIPIENT_SPEND_PRIVKEY = bytes([0x44] * 32)
+# The spend key is a BIP32 key, since BIP-376 identifies it by its derivation
+RECIPIENT_SEED = bytes([0x44] * 32)
 FUNDING_TXID = bytes([0xaa] * 32)
 FINGERPRINT = bytes([0x00] * 4)
-INPUT_AMOUNT, OUTPUT_AMOUNT = 100000, 90000
+INPUT_AMOUNT, OUTPUT_AMOUNT, SPEND_AMOUNT = 100000, 90000, 80000
 
 
 def main():
@@ -220,7 +225,10 @@ def main():
 
     # -- Step 1: the recipient publishes a silent payment address -------------
     scan_pubkey = pubkey_from_privkey(RECIPIENT_SCAN_PRIVKEY)
-    spend_pubkey = pubkey_from_privkey(RECIPIENT_SPEND_PRIVKEY)
+    spend_key = ext_key()
+    assert bip32_key_from_seed(RECIPIENT_SEED, len(RECIPIENT_SEED),
+                               BIP32_VER_MAIN_PRIVATE, 0, byref(spend_key)) == WALLY_OK
+    spend_pubkey = bytes(bytearray(spend_key.pub_key))
     recipient_info = scan_pubkey + spend_pubkey
     print(f'Recipient address: {sp_address(recipient_info)}')
 
@@ -324,6 +332,63 @@ def main():
     assert dleq_verify(proof, summed, scan_pubkey, share), 'DLEQ proof failed'
     print('DLEQ proof verified against the summed input keys')
 
+    # -- Step 7: the recipient spends the payment (BIP-376) -------------------
+    # The private key of the payment is the spend key plus the tweak that
+    # scanning found, which no BIP32 path can reach. So the PSBT carries the
+    # tweak, and the spend key that it applies to.
+    txid, txid_len = make_cbuffer('00' * 32)
+    assert wally_tx_get_txid(tx, txid, txid_len) == WALLY_OK
+
+    spend = pointer(wally_psbt())
+    assert wally_psbt_init_alloc(WALLY_PSBT_VERSION_2, 1, 1, 0, 0, spend) == WALLY_OK
+    tx_input = pointer(wally_tx_input())
+    assert wally_tx_input_init_alloc(txid, txid_len, 0, 0xffffffff,
+                                     None, 0, None, tx_input) == WALLY_OK
+    assert wally_psbt_add_tx_input_at(spend, 0, 0, tx_input) == WALLY_OK
+    utxo = pointer(wally_tx_output())
+    assert wally_tx_output_init_alloc(OUTPUT_AMOUNT, scripts[0], len(scripts[0]),
+                                      utxo) == WALLY_OK
+    assert wally_psbt_set_input_witness_utxo(spend, 0, utxo) == WALLY_OK
+    assert wally_psbt_set_input_sp_tweak(spend, 0, found[0], len(found[0])) == WALLY_OK
+
+    fingerprint, fingerprint_len = make_cbuffer('00' * BIP32_KEY_FINGERPRINT_LEN)
+    assert bip32_key_get_fingerprint(byref(spend_key), fingerprint,
+                                     fingerprint_len) == WALLY_OK
+    assert wally_psbt_add_input_sp_spend_keypath(spend, 0, spend_pubkey, len(spend_pubkey),
+                                                 fingerprint, fingerprint_len,
+                                                 None, 0) == WALLY_OK
+
+    tx_output = pointer(wally_tx_output())
+    change = p2wpkh_script(sender_pubkeys[0])
+    assert wally_tx_output_init_alloc(SPEND_AMOUNT, change, len(change),
+                                      tx_output) == WALLY_OK
+    assert wally_psbt_add_tx_output_at(spend, 0, 0, tx_output) == WALLY_OK
+
+    # A signer must refuse a tweak that does not give the key being spent: it
+    # comes from the Updater, and signing with a wrong one produces a valid
+    # signature for a key the signer does not control.
+    key, key_len = make_cbuffer('00' * EC_PRIVATE_KEY_LEN)
+    bad_tweak = bytes([found[0][0] ^ 1]) + found[0][1:]
+    assert wally_psbt_set_input_sp_tweak(spend, 0, bad_tweak, len(bad_tweak)) == WALLY_OK
+    assert wally_psbt_get_input_sp_spend_key(spend, 0, byref(spend_key),
+                                             key, key_len) == WALLY_EINVAL
+    assert wally_psbt_set_input_sp_tweak(spend, 0, found[0], len(found[0])) == WALLY_OK
+    print('A corrupted tweak is refused')
+
+    assert wally_psbt_sign_bip32(spend, byref(spend_key), 0) == WALLY_OK
+    ret, written = wally_psbt_get_input_taproot_signature_len(spend, 0)
+    assert (ret, written) == (WALLY_OK, EC_SIGNATURE_LEN), 'input was not signed'
+    assert wally_psbt_finalize(spend, 0) == WALLY_OK
+
+    spend_tx = POINTER(wally_tx)()
+    assert wally_psbt_extract(spend, WALLY_PSBT_EXTRACT_OPT_FINAL,
+                              byref(spend_tx)) == WALLY_OK
+    ret, written = wally_tx_to_bytes(spend_tx, WALLY_TX_FLAG_USE_WITNESS, buf, buf_len)
+    assert ret == WALLY_OK
+    print(f'Payment spent with a BIP-376 tweak ({written} bytes)')
+
+    wally_tx_free(spend_tx)
+    wally_psbt_free(spend)
     wally_tx_free(tx)
     wally_psbt_free(psbt)
     print('Silent payment round trip complete')

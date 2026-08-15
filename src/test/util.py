@@ -536,6 +536,7 @@ for f in (
     ('wally_psbt_get_input_signing_script', c_int, [POINTER(wally_psbt), c_size_t, c_void_p, c_size_t, c_size_t_p]),
     ('wally_psbt_get_input_signing_script_len', c_int, [POINTER(wally_psbt), c_size_t, c_size_t_p]),
     ('wally_psbt_get_input_sp_eligible', c_int, [POINTER(wally_psbt), c_size_t, c_size_t_p]),
+    ('wally_psbt_get_input_sp_spend_key', c_int, [POINTER(wally_psbt), c_size_t, POINTER(ext_key), c_void_p, c_size_t]),
     ('wally_psbt_get_length', c_int, [POINTER(wally_psbt), c_uint32, c_size_t_p]),
     ('wally_psbt_get_locktime', c_int, [POINTER(wally_psbt), c_size_t_p]),
     ('wally_psbt_get_sp_smallest_outpoint', c_int, [POINTER(wally_psbt), c_void_p, c_size_t]),

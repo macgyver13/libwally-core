@@ -438,6 +438,7 @@ export const psbt_get_input_sp_dleq_proofs_size = wrap('wally_psbt_get_input_sp_
 export const psbt_get_input_sp_ecdh_share_len = wrap('wally_psbt_get_input_sp_ecdh_share_len', [T.OpaqueRef, T.Int32, T.Int32, T.DestPtr(T.Int32)]);
 export const psbt_get_input_sp_ecdh_shares_size = wrap('wally_psbt_get_input_sp_ecdh_shares_size', [T.OpaqueRef, T.Int32, T.DestPtr(T.Int32)]);
 export const psbt_get_input_sp_eligible = wrap('wally_psbt_get_input_sp_eligible', [T.OpaqueRef, T.Int32, T.DestPtr(T.Int32)]);
+export const psbt_get_input_sp_spend_key = wrap('wally_psbt_get_input_sp_spend_key', [T.OpaqueRef, T.Int32, T.OpaqueRef, T.DestPtrSized(T.Bytes, C.EC_PRIVATE_KEY_LEN)]);
 export const psbt_get_input_sp_spend_keypath_len = wrap('wally_psbt_get_input_sp_spend_keypath_len', [T.OpaqueRef, T.Int32, T.Int32, T.DestPtr(T.Int32)]);
 export const psbt_get_input_sp_spend_keypaths_size = wrap('wally_psbt_get_input_sp_spend_keypaths_size', [T.OpaqueRef, T.Int32, T.DestPtr(T.Int32)]);
 export const psbt_get_input_sp_tweak_len = wrap('wally_psbt_get_input_sp_tweak_len', [T.OpaqueRef, T.Int32, T.DestPtr(T.Int32)]);
