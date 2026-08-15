@@ -199,6 +199,7 @@ EXPORTED_FUNCTIONS="['_malloc','_free','_bip32_key_free' \
 ,'_wally_pbkdf2_hmac_sha512' \
 ,'_wally_psbt_add_input_keypath' \
 ,'_wally_psbt_add_input_signature' \
+,'_wally_psbt_add_input_sp_spend_keypath' \
 ,'_wally_psbt_add_input_taproot_keypath' \
 ,'_wally_psbt_add_output_keypath' \
 ,'_wally_psbt_add_output_taproot_keypath' \
@@ -208,6 +209,7 @@ EXPORTED_FUNCTIONS="['_malloc','_free','_bip32_key_free' \
 ,'_wally_psbt_clear_input_required_lockheight' \
 ,'_wally_psbt_clear_input_required_locktime' \
 ,'_wally_psbt_clear_input_sequence' \
+,'_wally_psbt_clear_input_sp_tweak' \
 ,'_wally_psbt_clear_output_amount' \
 ,'_wally_psbt_clear_output_sp_v0_info' \
 ,'_wally_psbt_clear_output_sp_v0_label' \
@@ -223,6 +225,7 @@ EXPORTED_FUNCTIONS="['_malloc','_free','_bip32_key_free' \
 ,'_wally_psbt_find_input_signature' \
 ,'_wally_psbt_find_input_sp_dleq_proof' \
 ,'_wally_psbt_find_input_sp_ecdh_share' \
+,'_wally_psbt_find_input_sp_spend_keypath' \
 ,'_wally_psbt_find_input_spending_utxo' \
 ,'_wally_psbt_find_input_unknown' \
 ,'_wally_psbt_find_output_keypath' \
@@ -268,6 +271,11 @@ EXPORTED_FUNCTIONS="['_malloc','_free','_bip32_key_free' \
 ,'_wally_psbt_get_input_sp_ecdh_share_len' \
 ,'_wally_psbt_get_input_sp_ecdh_shares_size' \
 ,'_wally_psbt_get_input_sp_eligible' \
+,'_wally_psbt_get_input_sp_spend_keypath' \
+,'_wally_psbt_get_input_sp_spend_keypath_len' \
+,'_wally_psbt_get_input_sp_spend_keypaths_size' \
+,'_wally_psbt_get_input_sp_tweak' \
+,'_wally_psbt_get_input_sp_tweak_len' \
 ,'_wally_psbt_get_input_taproot_internal_key' \
 ,'_wally_psbt_get_input_taproot_internal_key_len' \
 ,'_wally_psbt_get_input_taproot_signature' \
@@ -339,6 +347,7 @@ EXPORTED_FUNCTIONS="['_malloc','_free','_bip32_key_free' \
 ,'_wally_psbt_input_set_witness_script' \
 ,'_wally_psbt_input_set_witness_utxo' \
 ,'_wally_psbt_input_set_witness_utxo_from_tx' \
+,'_wally_psbt_input_sp_spend_keypath_add' \
 ,'_wally_psbt_input_taproot_keypath_add' \
 ,'_wally_psbt_is_elements' \
 ,'_wally_psbt_is_finalized' \
@@ -370,6 +379,7 @@ EXPORTED_FUNCTIONS="['_malloc','_free','_bip32_key_free' \
 ,'_wally_psbt_set_input_sequence' \
 ,'_wally_psbt_set_input_sighash' \
 ,'_wally_psbt_set_input_signatures' \
+,'_wally_psbt_set_input_sp_tweak' \
 ,'_wally_psbt_set_input_taproot_internal_key' \
 ,'_wally_psbt_set_input_taproot_signature' \
 ,'_wally_psbt_set_input_unknowns' \

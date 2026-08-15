@@ -66,6 +66,12 @@ WALLY_CORE_API int wally_psbt_get_input_sp_dleq_proofs_size(const struct wally_p
 WALLY_CORE_API int wally_psbt_find_input_sp_dleq_proof(const struct wally_psbt *psbt, size_t index, const unsigned char *key, size_t key_len, size_t *written);
 WALLY_CORE_API int wally_psbt_get_input_sp_dleq_proof(const struct wally_psbt *psbt, size_t index, size_t subindex, unsigned char *bytes_out, size_t len, size_t *written);
 WALLY_CORE_API int wally_psbt_get_input_sp_dleq_proof_len(const struct wally_psbt *psbt, size_t index, size_t subindex, size_t *written);
+WALLY_CORE_API int wally_psbt_get_input_sp_spend_keypaths_size(const struct wally_psbt *psbt, size_t index, size_t *written);
+WALLY_CORE_API int wally_psbt_find_input_sp_spend_keypath(const struct wally_psbt *psbt, size_t index, const unsigned char *key, size_t key_len, size_t *written);
+WALLY_CORE_API int wally_psbt_get_input_sp_spend_keypath(const struct wally_psbt *psbt, size_t index, size_t subindex, unsigned char *bytes_out, size_t len, size_t *written);
+WALLY_CORE_API int wally_psbt_get_input_sp_spend_keypath_len(const struct wally_psbt *psbt, size_t index, size_t subindex, size_t *written);
+WALLY_CORE_API int wally_psbt_get_input_sp_tweak(const struct wally_psbt *psbt, size_t index, unsigned char *bytes_out, size_t len, size_t *written);
+WALLY_CORE_API int wally_psbt_get_input_sp_tweak_len(const struct wally_psbt *psbt, size_t index, size_t *written);
 WALLY_CORE_API int wally_psbt_get_input_sighash(const struct wally_psbt *psbt, size_t index, size_t *written);
 
 /**
@@ -99,6 +105,8 @@ WALLY_CORE_API int wally_psbt_set_input_keypaths(struct wally_psbt *psbt, size_t
 WALLY_CORE_API int wally_psbt_set_input_signatures(struct wally_psbt *psbt, size_t index, const struct wally_map *map_in);
 WALLY_CORE_API int wally_psbt_set_input_taproot_signature(struct wally_psbt *psbt, size_t index, const unsigned char *sig, size_t sig_len);
 WALLY_CORE_API int wally_psbt_set_input_taproot_internal_key(struct wally_psbt *psbt, size_t index, const unsigned char *pub_key, size_t pub_key_len);
+WALLY_CORE_API int wally_psbt_set_input_sp_tweak(struct wally_psbt *psbt, size_t index, const unsigned char *tweak, size_t tweak_len);
+WALLY_CORE_API int wally_psbt_clear_input_sp_tweak(struct wally_psbt *psbt, size_t index);
 WALLY_CORE_API int wally_psbt_add_input_signature(struct wally_psbt *psbt, size_t index, const unsigned char *pub_key, size_t pub_key_len, const unsigned char *sig, size_t sig_len);
 WALLY_CORE_API int wally_psbt_set_input_unknowns(struct wally_psbt *psbt, size_t index, const struct wally_map *map_in);
 WALLY_CORE_API int wally_psbt_set_input_sighash(struct wally_psbt *psbt, size_t index, uint32_t sighash);
