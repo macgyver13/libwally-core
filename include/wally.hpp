@@ -1270,6 +1270,12 @@ inline int psbt_add_input_keypath(const PSBT& psbt, uint32_t index, const PUB_KE
     return detail::check_ret(__FUNCTION__, ret);
 }
 
+template <class PSBT, class PUB_KEY, class FINGERPRINT, class CHILD_PATH>
+inline int psbt_add_input_sp_spend_keypath(const PSBT& psbt, uint32_t index, const PUB_KEY& pub_key, const FINGERPRINT& fingerprint, const CHILD_PATH& child_path) {
+    int ret = ::wally_psbt_add_input_sp_spend_keypath(detail::get_p(psbt), index, pub_key.data(), pub_key.size(), fingerprint.data(), fingerprint.size(), child_path.data(), child_path.size());
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
 template <class PSBT, class PUB_KEY, class TAPLEAF_HASHES, class FINGERPRINT, class CHILD_PATH>
 inline int psbt_add_input_taproot_keypath(const PSBT& psbt, uint32_t index, uint32_t flags, const PUB_KEY& pub_key, const TAPLEAF_HASHES& tapleaf_hashes, const FINGERPRINT& fingerprint, const CHILD_PATH& child_path) {
     int ret = ::wally_psbt_add_input_taproot_keypath(detail::get_p(psbt), index, flags, pub_key.data(), pub_key.size(), tapleaf_hashes.data(), tapleaf_hashes.size(), fingerprint.data(), fingerprint.size(), child_path.data(), child_path.size());
@@ -1627,6 +1633,12 @@ inline int psbt_input_set_witness_utxo(const INPUT& input, const struct wally_tx
 template <class INPUT, class UTXO>
 inline int psbt_input_set_witness_utxo_from_tx(const INPUT& input, const UTXO& utxo, uint32_t index) {
     int ret = ::wally_psbt_input_set_witness_utxo_from_tx(detail::get_p(input), detail::get_p(utxo), index);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class INPUT, class PUB_KEY, class FINGERPRINT, class CHILD_PATH>
+inline int psbt_input_sp_spend_keypath_add(const INPUT& input, const PUB_KEY& pub_key, const FINGERPRINT& fingerprint, const CHILD_PATH& child_path) {
+    int ret = ::wally_psbt_input_sp_spend_keypath_add(detail::get_p(input), pub_key.data(), pub_key.size(), fingerprint.data(), fingerprint.size(), child_path.data(), child_path.size());
     return detail::check_ret(__FUNCTION__, ret);
 }
 
