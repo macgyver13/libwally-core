@@ -91,6 +91,7 @@ struct wally_psbt_input {
     struct wally_map taproot_leaf_paths;
     struct wally_map sp_ecdh_shares; /* BIP375 shares keyed by scan public key */
     struct wally_map sp_dleq_proofs; /* BIP375 proofs keyed by scan public key */
+    struct wally_map sp_spend_keypaths; /* BIP376 spend key derivation paths */
 #ifndef WALLY_ABI_NO_ELEMENTS
     uint64_t issuance_amount; /* Issuance amount, or 0 if not given */
     uint64_t inflation_keys; /* Number of reissuance tokens, or 0 if none given */
@@ -231,6 +232,36 @@ WALLY_CORE_API int wally_psbt_input_find_sp_dleq_proof(
     const unsigned char *scan_key,
     size_t scan_key_len,
     size_t *written);
+
+/** Find a BIP376 spend keypath on an input, for `wally_psbt_find_input_sp_spend_keypath`. */
+WALLY_CORE_API int wally_psbt_input_find_sp_spend_keypath(
+    const struct wally_psbt_input *input,
+    const unsigned char *spend_key,
+    size_t spend_key_len,
+    size_t *written);
+
+/**
+ * Add a BIP376 silent payment spend keypath to an input.
+ *
+ * :param input: The input to add to.
+ * :param pub_key: The 33-byte spend pubkey used to derive the key locking this input.
+ * :param pub_key_len: Length of ``pub_key`` in bytes. Must be `EC_PUBLIC_KEY_LEN`.
+ * :param fingerprint: The master key fingerprint for the spend pubkey.
+ * :param fingerprint_len: Length of ``fingerprint`` in bytes. Must be `BIP32_KEY_FINGERPRINT_LEN`.
+ * :param child_path: The BIP32 derivation path for the spend pubkey.
+ * :param child_path_len: The number of items in ``child_path``.
+ *
+ * .. note:: BIP376 allows an all-zero ``fingerprint`` with an empty
+ *|    ``child_path``, if the Updater does not wish to reveal them.
+ */
+WALLY_CORE_API int wally_psbt_input_sp_spend_keypath_add(
+    struct wally_psbt_input *input,
+    const unsigned char *pub_key,
+    size_t pub_key_len,
+    const unsigned char *fingerprint,
+    size_t fingerprint_len,
+    const uint32_t *child_path,
+    size_t child_path_len);
 
 /**
  * Set the previous txid in an input.
@@ -2307,6 +2338,30 @@ WALLY_CORE_API int wally_psbt_add_input_taproot_keypath(
     size_t pub_key_len,
     const unsigned char *tapleaf_hashes,
     size_t tapleaf_hashes_len,
+    const unsigned char *fingerprint,
+    size_t fingerprint_len,
+    const uint32_t *child_path,
+    size_t child_path_len);
+
+/**
+ * Add a BIP376 silent payment spend keypath to a given PSBT input.
+ *
+ * :param psbt: The PSBT to add the keypath to. Must be a v2 PSBT.
+ * :param index: The zero-based index of the input to add to.
+ * :param pub_key: The 33-byte spend pubkey used to derive the key locking this input.
+ * :param pub_key_len: Length of ``pub_key`` in bytes. Must be `EC_PUBLIC_KEY_LEN`.
+ * :param fingerprint: The master key fingerprint for the spend pubkey.
+ * :param fingerprint_len: Length of ``fingerprint`` in bytes. Must be `BIP32_KEY_FINGERPRINT_LEN`.
+ * :param child_path: The BIP32 derivation path for the spend pubkey.
+ * :param child_path_len: The number of items in ``child_path``.
+ *
+ * .. note:: See `wally_psbt_input_sp_spend_keypath_add`.
+ */
+WALLY_CORE_API int wally_psbt_add_input_sp_spend_keypath(
+    struct wally_psbt *psbt,
+    uint32_t index,
+    const unsigned char *pub_key,
+    size_t pub_key_len,
     const unsigned char *fingerprint,
     size_t fingerprint_len,
     const uint32_t *child_path,
