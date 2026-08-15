@@ -379,6 +379,12 @@ def main():
     ret, written = wally_psbt_get_input_taproot_signature_len(spend, 0)
     assert (ret, written) == (WALLY_OK, EC_SIGNATURE_LEN), 'input was not signed'
     assert wally_psbt_finalize(spend, 0) == WALLY_OK
+    # BIP-376 has the finalizer drop what the witness makes redundant, so the
+    # tweak is not published to whoever the finalized PSBT is handed to
+    ret, written = wally_psbt_get_input_sp_tweak_len(spend, 0)
+    assert (ret, written) == (WALLY_OK, 0), 'the tweak was left in the psbt'
+    ret, num_items = wally_psbt_get_input_sp_spend_keypaths_size(spend, 0)
+    assert (ret, num_items) == (WALLY_OK, 0), 'the spend keypath was left in the psbt'
 
     spend_tx = POINTER(wally_tx)()
     assert wally_psbt_extract(spend, WALLY_PSBT_EXTRACT_OPT_FINAL,
