@@ -13,6 +13,15 @@ RECIPIENT = BIP352_JSON[0]['sending'][0]['given']['recipients'][0]
 WALLY_SP_INVALID, WALLY_SP_INCOMPLETE, WALLY_SP_COMPLETE = 0, 1, 2
 ENTROPY = '00' * 32
 NUMS = '50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0'
+
+# BIP-376: an arbitrary tweak, and the x-only output key of the input it spends
+TWEAK = '77' * 32
+OUTPUT_KEY = NUMS
+# The two BIP-376 fields as they appear in a serialized input map, for the
+# tests that splice them into a PSBT the library would not produce itself
+SP_TWEAK_KV = bytes([1, 0x20, 32]) + bytes.fromhex(TWEAK)
+SP_SPEND_KV = (bytes([34, 0x1f]) + bytes.fromhex(RECIPIENT['spend_pub_key']) +
+               bytes([4, 0, 0, 0, 0]))
 CONTROL_BLOCK_TAGS = (0xc0, 0xc1)
 ANNEX_TAG = 0x50
 
@@ -407,6 +416,104 @@ class SilentPaymentsTests(unittest.TestCase):
         self.assertEqual(wally_psbt_get_sp_status(psbt, 0),
                          (WALLY_OK, WALLY_SP_INVALID))
         wally_psbt_free(psbt)
+
+    def build_spend_psbt(self):
+        """Build a PSBTv2 with a single p2tr input, as a BIP-376 spend has."""
+        psbt = pointer(wally_psbt())
+        self.assertEqual(wally_psbt_init_alloc(2, 1, 1, 0, 0, psbt), WALLY_OK)
+        txid, txid_len = make_cbuffer('5b' * 32)
+        tx_in = pointer(wally_tx_input())
+        self.assertEqual(wally_tx_input_init_alloc(txid, txid_len, 0, 0xffffffff,
+                                                   None, 0, None, tx_in), WALLY_OK)
+        self.assertEqual(wally_psbt_add_tx_input_at(psbt, 0, 0, tx_in), WALLY_OK)
+        spk, spk_len = make_cbuffer('5120' + OUTPUT_KEY)
+        utxo = pointer(wally_tx_output())
+        self.assertEqual(wally_tx_output_init_alloc(100000, spk, spk_len, utxo), WALLY_OK)
+        self.assertEqual(wally_psbt_set_input_witness_utxo(psbt, 0, utxo), WALLY_OK)
+
+        tx_out = pointer(wally_tx_output())
+        self.assertEqual(wally_tx_output_init_alloc(90000, spk, spk_len, tx_out), WALLY_OK)
+        self.assertEqual(wally_psbt_add_tx_output_at(psbt, 0, 0, tx_out), WALLY_OK)
+        return psbt
+
+    def serialize(self, psbt):
+        """Serialize a PSBT to bytes."""
+        ret, length = wally_psbt_get_length(psbt, 0)
+        self.assertEqual(ret, WALLY_OK)
+        buf, buf_len = make_cbuffer('00' * length)
+        ret, written = wally_psbt_to_bytes(psbt, 0, buf, buf_len)
+        self.assertEqual((ret, written), (WALLY_OK, length))
+        return bytes(bytearray(buf))
+
+    def parse(self, data, flags=0):
+        """Parse PSBT bytes, returning the wally return code and the PSBT."""
+        buf, buf_len = make_cbuffer(h(data).decode('utf-8'))
+        psbt = POINTER(wally_psbt)()
+        return wally_psbt_from_bytes(buf, buf_len, flags, byref(psbt)), psbt
+
+    def test_bip376_fields(self):
+        """Test the BIP-376 silent payment spend fields round trip"""
+        psbt = self.build_spend_psbt()
+        tweak, tweak_len = make_cbuffer(TWEAK)
+        self.assertEqual(wally_psbt_set_input_sp_tweak(psbt, 0, tweak, tweak_len), WALLY_OK)
+        key, key_len = make_cbuffer(RECIPIENT['spend_pub_key'])
+        fingerprint, fingerprint_len = make_cbuffer('01020304')
+        path = (c_uint32 * 2)(352 | 0x80000000, 0)
+        self.assertEqual(wally_psbt_add_input_sp_spend_keypath(psbt, 0, key, key_len,
+                                                               fingerprint, fingerprint_len,
+                                                               path, 2), WALLY_OK)
+        data = self.serialize(psbt)
+        wally_psbt_free(psbt)
+
+        ret, psbt = self.parse(data)
+        self.assertEqual(ret, WALLY_OK)
+        out, out_len = make_cbuffer('00' * 32)
+        ret, written = wally_psbt_get_input_sp_tweak(psbt, 0, out, out_len)
+        self.assertEqual((ret, written), (WALLY_OK, 32))
+        self.assertEqual(h(out).decode('utf-8'), TWEAK)
+
+        ret, num_items = wally_psbt_get_input_sp_spend_keypaths_size(psbt, 0)
+        self.assertEqual((ret, num_items), (WALLY_OK, 1))
+        # The keypath is found by the spend pubkey, and holds fingerprint||path
+        ret, found = wally_psbt_find_input_sp_spend_keypath(psbt, 0, key, key_len)
+        self.assertEqual((ret, found), (WALLY_OK, 1))
+        out, out_len = make_cbuffer('00' * 12)
+        ret, written = wally_psbt_get_input_sp_spend_keypath(psbt, 0, 0, out, out_len)
+        self.assertEqual((ret, written), (WALLY_OK, 12))
+        self.assertEqual(h(out).decode('utf-8'), '01020304' + '60010080' + '00000000')
+        self.assertEqual(self.serialize(psbt), data)
+        wally_psbt_free(psbt)
+
+    def test_bip376_invalid(self):
+        """Test that invalid BIP-376 fields are rejected"""
+        psbt = self.build_spend_psbt()
+        tweak, tweak_len = make_cbuffer(TWEAK)
+        # The tweak is a scalar to add to the spend key: 32 bytes, no more
+        for length in [0, 31, 33]:
+            self.assertEqual(wally_psbt_set_input_sp_tweak(psbt, 0, tweak, length),
+                             WALLY_EINVAL)
+        self.assertEqual(wally_psbt_set_input_sp_tweak(psbt, 0, tweak, tweak_len), WALLY_OK)
+        # Both fields are v2 only, so a v2 PSBT carrying them cannot downgrade
+        self.assertEqual(wally_psbt_set_version(psbt, 0, 0), WALLY_EINVAL)
+        data = self.serialize(psbt)
+        wally_psbt_free(psbt)
+
+        # A repeated tweak is invalid: the field carries no keydata, so an
+        # input can only have one. Duplicate the one the input already has.
+        at = data.index(SP_TWEAK_KV)
+        self.assertEqual(self.parse(data[:at] + SP_TWEAK_KV + data[at:])[0],
+                         WALLY_EINVAL)
+
+        # Splicing either field into a v0 PSBT must fail to parse. The v0
+        # PSBT below ends with the (empty) input map and output map, so the
+        # field is inserted before the second to last byte.
+        psbt = self.build_spend_psbt()
+        self.assertEqual(wally_psbt_set_version(psbt, 0, 0), WALLY_OK)
+        v0 = self.serialize(psbt)
+        wally_psbt_free(psbt)
+        self.assertEqual(self.parse(v0)[0], WALLY_OK)
+        for kv in [SP_TWEAK_KV, SP_SPEND_KV]:
+            self.assertEqual(self.parse(v0[:-2] + kv + v0[-2:])[0], WALLY_EINVAL)
 
     def test_resolve_entropy(self):
         """Test that the entropy changes the proof, but not the payment"""

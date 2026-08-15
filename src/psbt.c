@@ -395,6 +395,7 @@ MAP_INNER_FIELD(input, witness_script, PSBT_IN_WITNESS_SCRIPT, psbt_fields)
 MAP_INNER_FIELD(input, final_scriptsig, PSBT_IN_FINAL_SCRIPTSIG, psbt_fields)
 MAP_INNER_FIELD(input, taproot_signature, PSBT_IN_TAP_KEY_SIG, psbt_fields)
 MAP_INNER_FIELD(input, taproot_internal_key, PSBT_IN_TAP_INTERNAL_KEY, psbt_fields)
+MAP_INNER_FIELD(input, sp_tweak, PSBT_IN_SP_TWEAK, psbt_fields)
 SET_STRUCT(wally_psbt_input, final_witness, wally_tx_witness_stack,
            wally_tx_witness_stack_clone_alloc, wally_tx_witness_stack_free)
 SET_MAP(wally_psbt_input, keypath,)
@@ -767,6 +768,9 @@ static int psbt_input_field_verify(uint32_t field_type,
         case PSBT_IN_TAP_MERKLE_ROOT:
             /* 32 byte x-only pubkey, or 32 byte merkle hash */
             return val_len == SHA256_LEN ? WALLY_OK : WALLY_EINVAL;
+        case PSBT_IN_SP_TWEAK:
+            /* 32 byte BIP-376 tweak, added to the spend key to sign with */
+            return val_len == EC_PRIVATE_KEY_LEN ? WALLY_OK : WALLY_EINVAL;
         default:
             break;
         }
@@ -1134,6 +1138,7 @@ static void psbt_input_init(struct wally_psbt_input *input)
     wally_map_init(0, musig2_partial_sig_verify, &input->musig2_partial_sigs);
     wally_map_init(0, sp_ecdh_share_verify, &input->sp_ecdh_shares);
     wally_map_init(0, sp_dleq_verify, &input->sp_dleq_proofs);
+    wally_map_init(0, wally_keypath_public_key_verify, &input->sp_spend_keypaths);
 #ifdef BUILD_ELEMENTS
     wally_map_init(0, pset_map_input_field_verify, &input->pset_fields);
 #endif /* BUILD_ELEMENTS */
@@ -1159,6 +1164,7 @@ static int psbt_input_free(struct wally_psbt_input *input, bool free_parent)
         wally_map_clear(&input->musig2_partial_sigs);
         wally_map_clear(&input->sp_ecdh_shares);
         wally_map_clear(&input->sp_dleq_proofs);
+        wally_map_clear(&input->sp_spend_keypaths);
 #ifdef BUILD_ELEMENTS
         wally_tx_free(input->pegin_tx);
         wally_tx_witness_stack_free(input->pegin_witness);
@@ -1238,6 +1244,27 @@ SP_FIND_MAP(wally_psbt, global_sp_ecdh_share, global_sp_ecdh_shares)
 SP_FIND_MAP(wally_psbt, global_sp_dleq_proof, global_sp_dleq_proofs)
 SP_FIND_MAP(wally_psbt_input, sp_ecdh_share, sp_ecdh_shares)
 SP_FIND_MAP(wally_psbt_input, sp_dleq_proof, sp_dleq_proofs)
+
+/* BIP376 spend keypaths are keyed by spend pubkey. Only find/add are needed:
+ * an Updater adds one entry per spend key, and a Signer looks its own up.
+ */
+SP_FIND_MAP(wally_psbt_input, sp_spend_keypath, sp_spend_keypaths)
+
+int wally_psbt_input_sp_spend_keypath_add(struct wally_psbt_input *input,
+                                          const unsigned char *pub_key,
+                                          size_t pub_key_len,
+                                          const unsigned char *fingerprint,
+                                          size_t fingerprint_len,
+                                          const uint32_t *child_path,
+                                          size_t child_path_len)
+{
+    if (!input)
+        return WALLY_EINVAL;
+    return wally_map_keypath_add(&input->sp_spend_keypaths,
+                                 pub_key, pub_key_len,
+                                 fingerprint, fingerprint_len,
+                                 child_path, child_path_len);
+}
 
 int wally_psbt_input_set_sp_ecdh_share(struct wally_psbt_input *input,
                                        const unsigned char *scan_key,
@@ -2154,6 +2181,21 @@ int wally_psbt_add_input_keypath(
                                         child_path, child_path_len);
 }
 
+int wally_psbt_add_input_sp_spend_keypath(
+    struct wally_psbt *psbt, uint32_t index,
+    const unsigned char *pub_key, size_t pub_key_len,
+    const unsigned char *fingerprint, size_t fingerprint_len,
+    const uint32_t *child_path, size_t child_path_len)
+{
+    struct wally_psbt_input *inp = psbt_get_input(psbt, index);
+    if (!inp || !psbt_is_valid(psbt) || psbt->version != PSBT_2)
+        return WALLY_EINVAL;
+
+    return wally_psbt_input_sp_spend_keypath_add(inp, pub_key, pub_key_len,
+                                                 fingerprint, fingerprint_len,
+                                                 child_path, child_path_len);
+}
+
 int wally_psbt_add_input_taproot_keypath(
     struct wally_psbt *psbt,
     uint32_t index, uint32_t flags,
@@ -2776,7 +2818,7 @@ static int pull_psbt_input(const struct wally_psbt *psbt,
         uint64_t field_type = pull_field_type(cursor, max, &key, &key_len, is_pset, &is_pset_ft);
         const uint64_t raw_field_type = field_type;
         uint64_t field_bit = 0;
-        bool is_known;
+        bool is_known, has_keydata;
 
         if (is_pset_ft) {
             is_known = field_type <= PSET_IN_MAX;
@@ -2784,11 +2826,33 @@ static int pull_psbt_input(const struct wally_psbt *psbt,
                 field_type = PSET_FT(field_type);
                 field_bit = field_type;
             }
+            has_keydata = !!(field_bit & PSBT_IN_HAVE_KEYDATA);
         } else {
             is_known = field_type <= PSBT_IN_MAX &&
                        field_type != PSBT_IN_RESERVED_0X19;
-            if (is_known)
-                field_bit = PSBT_FT(field_type);
+            if (is_known && field_type >= PSBT_FT_LIMIT) {
+                /* Fields at or above PSBT_FT_LIMIT have no mask bit of their
+                 * own (see psbt_io.h), so the duplicate/keydata/version rules
+                 * the masks encode are applied by hand here instead. All of
+                 * them are v2 only. PSBT_IN_SP_TWEAK is a single bare value,
+                 * so it carries no keydata and cannot repeat; the aggregate
+                 * fields are keyed by scan pubkey and repeat once per signer.
+                 */
+                if (psbt->version == PSBT_0) {
+                    ret = WALLY_EINVAL; /* v2-only field */
+                    break;
+                }
+                has_keydata = field_type != PSBT_IN_SP_TWEAK;
+                if (!has_keydata &&
+                    wally_map_get_integer(&result->psbt_fields, field_type)) {
+                    ret = WALLY_EINVAL; /* Duplicate non-repeatable field */
+                    break;
+                }
+            } else {
+                if (is_known)
+                    field_bit = PSBT_FT(field_type);
+                has_keydata = !!(field_bit & PSBT_IN_HAVE_KEYDATA);
+            }
         }
 
         /* Process based on type */
@@ -2798,7 +2862,7 @@ static int pull_psbt_input(const struct wally_psbt *psbt,
                 break;
             }
             keyset |= field_bit;
-            if (field_bit & PSBT_IN_HAVE_KEYDATA)
+            if (has_keydata)
                 pull_subfield_end(cursor, max, key, key_len);
             else
                 subfield_nomore_end(cursor, max, key, key_len);
@@ -2835,6 +2899,7 @@ static int pull_psbt_input(const struct wally_psbt *psbt,
             case PSBT_IN_TAP_KEY_SIG:
             case PSBT_IN_TAP_INTERNAL_KEY:
             case PSBT_IN_TAP_MERKLE_ROOT:
+            case PSBT_IN_SP_TWEAK:
                 pull_varlength_buff(cursor, max, &val_p, &val_len);
                 ret = wally_map_add_integer(&result->psbt_fields, raw_field_type,
                                             val_p, val_len);
@@ -2888,6 +2953,10 @@ static int pull_psbt_input(const struct wally_psbt *psbt,
             case PSBT_IN_SP_DLEQ:
                 ret = pull_map_item(cursor, max, key, key_len,
                                     &result->sp_dleq_proofs);
+                break;
+            case PSBT_IN_SP_SPEND_BIP32_DERIVATION:
+                ret = pull_map_item(cursor, max, key, key_len,
+                                    &result->sp_spend_keypaths);
                 break;
 #ifdef BUILD_ELEMENTS
             case PSET_FT(PSET_IN_EXPLICIT_VALUE):
@@ -3603,7 +3672,9 @@ static int push_psbt_input(const struct wally_psbt *psbt,
     const struct wally_map_item *final_scriptsig;
 
     if ((is_pset || psbt->version == PSBT_0) &&
-        (input->sp_ecdh_shares.num_items || input->sp_dleq_proofs.num_items))
+        (input->sp_ecdh_shares.num_items || input->sp_dleq_proofs.num_items ||
+         input->sp_spend_keypaths.num_items ||
+         wally_map_get_integer(&input->psbt_fields, PSBT_IN_SP_TWEAK)))
         return WALLY_EINVAL;
 
     /* Non witness utxo */
@@ -3740,6 +3811,12 @@ static int push_psbt_input(const struct wally_psbt *psbt,
                       &input->sp_ecdh_shares);
         push_psbt_map(cursor, max, PSBT_IN_SP_DLEQ, false,
                       &input->sp_dleq_proofs);
+        push_psbt_map(cursor, max, PSBT_IN_SP_SPEND_BIP32_DERIVATION, false,
+                      &input->sp_spend_keypaths);
+        if ((ret = push_varbuff_from_map(cursor, max, PSBT_IN_SP_TWEAK,
+                                         PSBT_IN_SP_TWEAK,
+                                         false, &input->psbt_fields)) != WALLY_OK)
+            return ret;
     }
 
 #ifdef BUILD_ELEMENTS
@@ -4236,6 +4313,8 @@ static int combine_input(struct wally_psbt_input *dst,
     if ((ret = wally_map_combine(&dst->sp_ecdh_shares, &src->sp_ecdh_shares)) != WALLY_OK)
         return ret;
     if ((ret = wally_map_combine(&dst->sp_dleq_proofs, &src->sp_dleq_proofs)) != WALLY_OK)
+        return ret;
+    if ((ret = wally_map_combine(&dst->sp_spend_keypaths, &src->sp_spend_keypaths)) != WALLY_OK)
         return ret;
     if ((ret = combine_map_if_empty(&dst->taproot_leaf_signatures, &src->taproot_leaf_signatures)) != WALLY_OK)
         return ret;
@@ -4759,7 +4838,10 @@ static int psbt_v2_to_v0(struct wally_psbt *psbt)
         return WALLY_EINVAL;
     for (i = 0; i < psbt->num_inputs; ++i) {
         if (psbt->inputs[i].sp_ecdh_shares.num_items ||
-            psbt->inputs[i].sp_dleq_proofs.num_items)
+            psbt->inputs[i].sp_dleq_proofs.num_items ||
+            psbt->inputs[i].sp_spend_keypaths.num_items ||
+            wally_map_get_integer(&psbt->inputs[i].psbt_fields,
+                                  PSBT_IN_SP_TWEAK))
             return WALLY_EINVAL;
     }
     for (i = 0; i < psbt->num_outputs; ++i) {
@@ -6949,12 +7031,14 @@ PSBT_FIELD(input, witness_script, PSBT_0)
 PSBT_FIELD(input, final_scriptsig, PSBT_0)
 PSBT_FIELD(input, taproot_signature, PSBT_0)
 PSBT_FIELD(input, taproot_internal_key, PSBT_0)
+PSBT_FIELD(input, sp_tweak, PSBT_2)
 PSBT_GET_S(input, final_witness, wally_tx_witness_stack, wally_tx_witness_stack_clone_alloc)
 PSBT_GET_M(input, keypath)
 PSBT_GET_M(input, signature)
 PSBT_GET_M(input, unknown)
 PSBT_GET_M(input, sp_ecdh_share)
 PSBT_GET_M(input, sp_dleq_proof)
+PSBT_GET_M(input, sp_spend_keypath)
 PSBT_GET_I(input, sighash, size_t, PSBT_0)
 
 int wally_psbt_get_input_previous_txid(const struct wally_psbt *psbt, size_t index,
