@@ -140,7 +140,16 @@
 #define PSBT_IN_RESERVED_LAST  0x1c
 #define PSBT_IN_SP_ECDH_SHARE 0x1d
 #define PSBT_IN_SP_DLEQ 0x1e
-#define PSBT_IN_MAX PSBT_IN_SP_DLEQ
+#define PSBT_IN_SP_SPEND_BIP32_DERIVATION 0x1f
+#define PSBT_IN_SP_TWEAK 0x20
+#define PSBT_IN_MAX PSBT_IN_SP_TWEAK
+
+/* Field types at or above PSBT_FT_LIMIT get no bit of their own in the field
+ * masks below, since PSBT_FT(k) for k >= 32 aliases PSET_FT(k - 32). Such
+ * fields are given a zero field bit, and their keydata, repeatability and
+ * version rules are applied by hand in the parser instead of via the masks.
+ */
+#define PSBT_FT_LIMIT 32
 
 /* Inputs: PSET */
 #define PSET_IN_ISSUANCE_VALUE 0x00
@@ -177,7 +186,8 @@
                               PSBT_FT(PSBT_IN_TAP_LEAF_SCRIPT) | \
                               PSBT_FT(PSBT_IN_TAP_BIP32_DERIVATION) | \
                               PSBT_FT(PSBT_IN_SP_ECDH_SHARE) | \
-                              PSBT_FT(PSBT_IN_SP_DLEQ))
+                              PSBT_FT(PSBT_IN_SP_DLEQ) | \
+                              PSBT_FT(PSBT_IN_SP_SPEND_BIP32_DERIVATION))
 
 /* Input PSBT/PSET fields that can be repeated */
 #define PSBT_IN_REPEATABLE PSBT_IN_HAVE_KEYDATA
@@ -198,6 +208,7 @@
                                PSBT_FT(PSBT_IN_REQUIRED_HEIGHT_LOCKTIME) | \
                                PSBT_FT(PSBT_IN_SP_ECDH_SHARE) | \
                                PSBT_FT(PSBT_IN_SP_DLEQ) | \
+                               PSBT_FT(PSBT_IN_SP_SPEND_BIP32_DERIVATION) | \
                                PSET_FT(PSET_IN_ISSUANCE_VALUE) | \
                                PSET_FT(PSET_IN_ISSUANCE_VALUE_COMMITMENT) | \
                                PSET_FT(PSET_IN_ISSUANCE_VALUE_RANGEPROOF) | \
