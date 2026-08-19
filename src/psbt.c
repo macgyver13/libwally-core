@@ -2833,16 +2833,21 @@ static int pull_psbt_input(const struct wally_psbt *psbt,
             if (is_known && field_type >= PSBT_FT_LIMIT) {
                 /* Fields at or above PSBT_FT_LIMIT have no mask bit of their
                  * own (see psbt_io.h), so the duplicate/keydata/version rules
-                 * the masks encode are applied by hand here instead.
-                 * PSBT_IN_SP_TWEAK is the only such field: it is v2-only,
-                 * carries no keydata, and can appear at most once.
+                 * the masks encode are applied by hand here instead. All of
+                 * them are v2 only. PSBT_IN_SP_TWEAK is a single bare value,
+                 * so it carries no keydata and cannot repeat; the aggregate
+                 * fields are keyed by scan pubkey and repeat once per signer.
                  */
-                if (psbt->version == PSBT_0 ||
-                    wally_map_get_integer(&result->psbt_fields, field_type)) {
-                    ret = WALLY_EINVAL; /* v2-only field, or a duplicate */
+                if (psbt->version == PSBT_0) {
+                    ret = WALLY_EINVAL; /* v2-only field */
                     break;
                 }
-                has_keydata = false;
+                has_keydata = field_type != PSBT_IN_SP_TWEAK;
+                if (!has_keydata &&
+                    wally_map_get_integer(&result->psbt_fields, field_type)) {
+                    ret = WALLY_EINVAL; /* Duplicate non-repeatable field */
+                    break;
+                }
             } else {
                 if (is_known)
                     field_bit = PSBT_FT(field_type);
