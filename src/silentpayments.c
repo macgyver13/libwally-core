@@ -139,6 +139,19 @@ static int sp_witness_version(const unsigned char *script, size_t script_len)
     return script[0] >= OP_1 && script[0] <= OP_16 ? script[0] - 0x50 : -1;
 }
 
+/* Whether a P2SH prevout is in fact paid to the redeem script given for it.
+ * The PSBT's redeem script is otherwise attacker-choosable on this path.
+ */
+static bool sp_p2sh_redeem_matches(const unsigned char *script,
+                                   const unsigned char *redeem_script,
+                                   size_t redeem_script_len)
+{
+    unsigned char hash[HASH160_LEN];
+    return wally_hash160(redeem_script, redeem_script_len,
+                         hash, sizeof(hash)) == WALLY_OK &&
+           !memcmp(hash, script + 2, sizeof(hash)); /* OP_HASH160 [push] */
+}
+
 /* Classify an input, returning whether it is eligible, and if so whether it
  * is a taproot input (whose key must be parity-normalized before summing).
  */
@@ -199,7 +212,12 @@ static int sp_classify_input(const struct wally_psbt *psbt, size_t index,
         *is_eligible = true;
         break;
     case WALLY_SCRIPT_TYPE_P2SH:
-        *is_eligible = redeem_type == WALLY_SCRIPT_TYPE_P2WPKH;
+        /* A redeem script the prevout does not pay to cannot be spent with,
+         * so the input is simply not eligible, as an unreadable one is not
+         */
+        *is_eligible = redeem_type == WALLY_SCRIPT_TYPE_P2WPKH &&
+                       sp_p2sh_redeem_matches(utxo->script, redeem_script,
+                                              redeem_script_len);
         break;
     case WALLY_SCRIPT_TYPE_P2TR:
         /* A NUMS internal key means the key path is unspendable */
@@ -320,10 +338,60 @@ cleanup:
     return ret;
 }
 
+/* Whether an input's prevout commits to the public key given for it. A
+ * non-taproot script commits only to hash160 of the key, so the PSBT must
+ * name the key itself - and nothing stops it naming a key the prevout does
+ * not pay to. A share proven against such a key is bound to nothing: the
+ * proof verifies, A_sum is wrong, and the recipient scanning with the real
+ * A_sum never finds the output.
+ */
+static bool sp_key_matches_script(const struct wally_psbt *psbt, size_t index,
+                                  const unsigned char *key, size_t key_len)
+{
+    unsigned char redeem_script[WALLY_SCRIPTPUBKEY_P2WPKH_LEN];
+    unsigned char hash[HASH160_LEN];
+    const struct wally_tx_output *utxo = NULL;
+    const unsigned char *committed;
+    size_t script_type = WALLY_SCRIPT_TYPE_UNKNOWN;
+    size_t redeem_script_len = 0, field_len = 0;
+
+    if (wally_psbt_get_input_best_utxo(psbt, index, &utxo) != WALLY_OK || !utxo ||
+        wally_scriptpubkey_get_type(utxo->script, utxo->script_len,
+                                    &script_type) != WALLY_OK ||
+        wally_hash160(key, key_len, hash, sizeof(hash)) != WALLY_OK)
+        return false;
+
+    switch (script_type) {
+    case WALLY_SCRIPT_TYPE_P2PKH:
+        committed = utxo->script + 3; /* OP_DUP OP_HASH160 [push] */
+        break;
+    case WALLY_SCRIPT_TYPE_P2WPKH:
+        committed = utxo->script + 2; /* OP_0 [push] */
+        break;
+    case WALLY_SCRIPT_TYPE_P2SH:
+        /* Both links must hold: the prevout pays to the redeem script, and
+         * the redeem script pays to the key
+         */
+        if (wally_psbt_get_input_redeem_script_len(psbt, index, &field_len) != WALLY_OK ||
+            field_len != sizeof(redeem_script) ||
+            wally_psbt_get_input_redeem_script(psbt, index, redeem_script,
+                                               sizeof(redeem_script),
+                                               &redeem_script_len) != WALLY_OK ||
+            !sp_p2sh_redeem_matches(utxo->script, redeem_script, redeem_script_len))
+            return false;
+        committed = redeem_script + 2; /* OP_0 [push] */
+        break;
+    default:
+        return false;
+    }
+    return !memcmp(hash, committed, sizeof(hash));
+}
+
 /* Read the public key an eligible input is spent with. For taproot that is the
  * output key from the input's scriptPubKey; otherwise it is the input's sole
- * BIP32 keypath key. Returns false if the PSBT does not name a usable key,
- * which leaves any share on that input unverifiable.
+ * BIP32 keypath key, which must be the key the prevout pays to. Returns false
+ * if the PSBT does not name a usable key, which leaves any share on that input
+ * unverifiable.
  */
 static bool sp_input_pub_key(const secp256k1_context *ctx,
                              const struct wally_psbt *psbt, size_t index,
@@ -350,7 +418,9 @@ static bool sp_input_pub_key(const secp256k1_context *ctx,
     }
 
     if (keypaths->num_items != 1 ||
-        keypaths->items[0].key_len != EC_PUBLIC_KEY_LEN)
+        keypaths->items[0].key_len != EC_PUBLIC_KEY_LEN ||
+        !sp_key_matches_script(psbt, index, keypaths->items[0].key,
+                               EC_PUBLIC_KEY_LEN))
         return false;
     return !!secp256k1_ec_pubkey_parse(ctx, pubkey_out, keypaths->items[0].key,
                                        EC_PUBLIC_KEY_LEN);
