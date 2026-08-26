@@ -3,6 +3,32 @@
 ## Version 1.5.7
 
 ### Added
+- silentpayments: Add BIP-352 sending, BIP-375 PSBT support and BIP-376 spending:
+  - New `wally_silentpayments.h` API. Sending:
+    `wally_psbt_get_input_sp_eligible`, `wally_psbt_get_sp_smallest_outpoint`,
+    and `wally_psbt_sp_resolve` to derive the outputs and attach one global
+    ECDH share and DLEQ proof per recipient scan key
+  - Verification without private keys: `wally_psbt_get_sp_status` checks
+    shares, proofs and resolved output scripts
+  - Collaborative sending: `wally_psbt_sp_contribute` writes one input's share
+    and proof, and `wally_psbt_sp_resolve_shares` combines the per-input shares
+    into the outputs once every signer has contributed
+  - Inputs held under an aggregate (MuSig2 or FROST) key:
+    `wally_psbt_sp_musig_contribute`, `wally_psbt_sp_musig_resolve_shares`,
+    `wally_psbt_get_sp_musig_status`, `wally_psbt_get_sp_musig_session_digest`,
+    `wally_psbt_sp_musig_round1` and `wally_psbt_sp_musig_round2`
+  - BIP-375 PSBT fields: `PSBT_OUT_SP_V0_INFO`, `PSBT_OUT_SP_V0_LABEL`, the
+    global/per-input ECDH share and DLEQ proof maps, and the per-input partial
+    share and proof fields for aggregate keys, with their accessors
+  - BIP-376 spend fields: `PSBT_IN_SP_TWEAK` and
+    `PSBT_IN_SP_SPEND_BIP32_DERIVATION`, signing of tweaked spend keys via
+    `wally_psbt_get_input_sp_spend_key`, and their removal on finalization
+  - BIP-352 addresses: `wally_sp_address_from_bytes`
+  - BIP-392 `sp()` output descriptors, and the `spscan`/`spspend` key
+    expressions (`wally_descriptor_sp_key_from_bytes`,
+    `wally_descriptor_sp_key_to_bytes`)
+  - Requires secp256k1-zkp with the silentpayments and dleq modules
+    (guarded by `BUILD_STANDARD_SECP`)
 - crypto: Add `wally_ec_public_key_compress`. `wally_ec_public_key_decompress`
   now also accepts an already-uncompressed key, returning it unchanged.
 - descriptor: Add `wally_descriptor_derive_bip32_key` to derive any key in a
