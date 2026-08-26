@@ -1,3 +1,4 @@
+import copy
 import json
 import unittest
 from util import *
@@ -93,6 +94,14 @@ def taproot_internal_key(witness_hex):
 
 
 @unittest.skipUnless(wally_psbt_sp_resolve, 'Silent payments module not enabled')
+
+def hash160(hex_data):
+    """hash160 of a hex string, as a hex string"""
+    data, data_len = make_cbuffer(hex_data)
+    out, out_len = make_cbuffer('00' * 20)
+    assert wally_hash160(data, data_len, out, out_len) == WALLY_OK
+    return h(out).decode('utf-8')
+
 class SilentPaymentsTests(unittest.TestCase):
 
     def build_psbt(self, vin, recipients):
@@ -280,6 +289,25 @@ class SilentPaymentsTests(unittest.TestCase):
         self.assertEqual(wally_psbt_get_input_sp_eligible(psbt, 1), (WALLY_EINVAL, 0))
         wally_psbt_free(psbt)
 
+    def test_input_eligible_p2sh_redeem(self):
+        """Test that a P2SH input's redeem script must match its prevout
+
+        A P2SH prevout commits only to hash160 of its redeem script, so the
+        script the PSBT supplies is attacker-choosable. One the prevout does
+        not pay to cannot be spent with, so the input is simply ineligible,
+        exactly as an unreadable one is.
+        """
+        redeem = '0014' + hash160('02' + '11' * 32)
+        for spk, eligible in [('a914' + hash160(redeem) + '87', 1),
+                              ('a914' + '22' * 20 + '87', 0)]:
+            psbt = self.make_psbt([spk])
+            script, script_len = make_cbuffer(redeem)
+            self.assertEqual(wally_psbt_set_input_redeem_script(
+                psbt, 0, script, script_len), WALLY_OK)
+            self.assertEqual(wally_psbt_get_input_sp_eligible(psbt, 0),
+                             (WALLY_OK, eligible))
+            wally_psbt_free(psbt)
+
     def test_resolve_invalid(self):
         """Test resolving with invalid arguments"""
         case = BIP352_JSON[0]['sending'][0]['given']
@@ -453,6 +481,33 @@ class SilentPaymentsTests(unittest.TestCase):
         buf, buf_len = make_cbuffer(h(data).decode('utf-8'))
         psbt = POINTER(wally_psbt)()
         return wally_psbt_from_bytes(buf, buf_len, flags, byref(psbt)), psbt
+
+    def test_status_key_not_paid_to(self):
+        """Test that an input's named key must be the key its prevout pays to
+
+        A non-taproot script commits only to hash160 of the key, so the PSBT
+        must name the key itself, and nothing stops it naming a key the prevout
+        does not pay to. A share proven against such a key is bound to nothing:
+        the proof verifies, A_sum is wrong, and the recipient scanning with the
+        real A_sum never finds the output.
+        """
+        case = BIP352_JSON[0]['sending'][0]['given']
+        entropy, entropy_len = make_cbuffer(ENTROPY)
+
+        # Repointing the prevout at another key hash, while the keypath still
+        # names the original key, is the same mismatch seen from the other side
+        for spk, expected in [(None, WALLY_SP_COMPLETE),
+                              ('76a914' + '33' * 20 + '88ac', WALLY_SP_INVALID)]:
+            vin = copy.deepcopy(case['vin'])
+            if spk is not None:
+                vin[0]['prevout']['scriptPubKey']['hex'] = spk
+            psbt = self.build_psbt(vin, case['recipients'])
+            keys, keys_len = make_cbuffer(''.join(v['private_key'] for v in vin))
+            self.assertEqual(wally_psbt_sp_resolve(psbt, keys, keys_len, entropy,
+                                                   entropy_len, 0), WALLY_OK)
+            self.assertEqual(wally_psbt_get_sp_status(psbt, 0),
+                             (WALLY_OK, expected))
+            wally_psbt_free(psbt)
 
     def test_bip376_fields(self):
         """Test the BIP-376 silent payment spend fields round trip"""
