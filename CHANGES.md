@@ -22,6 +22,15 @@
   - BIP-392 `sp()` output descriptors, and the `spscan`/`spspend` key
     expressions (`wally_descriptor_sp_key_from_bytes`,
     `wally_descriptor_sp_key_to_bytes`)
+  - Inputs held under an aggregate (MuSig2 or FROST) key:
+    `wally_psbt_sp_musig_contribute`, `wally_psbt_sp_musig_resolve_shares`,
+    `wally_psbt_get_sp_musig_status`, `wally_psbt_get_sp_musig_session_digest`,
+    `wally_psbt_sp_musig_round1` and `wally_psbt_sp_musig_round2`, with the
+    per-input BIP-375 partial share and proof fields they exchange
+  - MuSig2 signing of silent payment inputs under an aggregate key:
+    `wally_psbt_musig2_agg_then_derive_add_nonce`,
+    `wally_psbt_musig2_agg_then_derive_sign` and
+    `wally_psbt_musig2_agg_then_derive_finalize_input`
   - Requires secp256k1-zkp with the silentpayments and dleq modules
     (guarded by `BUILD_STANDARD_SECP`)
 
