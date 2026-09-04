@@ -309,6 +309,7 @@ static jobjectArray create_jstringArray(JNIEnv *jenv, char **p, size_t len) {
 %apply(char *STRING, size_t LENGTH) { (const unsigned char* participants, size_t participants_len) };
 %apply(char *STRING, size_t LENGTH) { (const unsigned char* pass, size_t pass_len) };
 %apply(char *STRING, size_t LENGTH) { (const unsigned char* priv_key, size_t priv_key_len) };
+%apply(char *STRING, size_t LENGTH) { (const unsigned char* priv_keys, size_t priv_keys_len) };
 %apply(char *STRING, size_t LENGTH) { (const unsigned char* proof, size_t proof_len) };
 %apply(char *STRING, size_t LENGTH) { (const unsigned char* pub_key, size_t pub_key_len) };
 %apply(char *STRING, size_t LENGTH) { (const unsigned char* pub_keys, size_t pub_keys_len) };
@@ -322,6 +323,7 @@ static jobjectArray create_jstringArray(JNIEnv *jenv, char **p, size_t len) {
 %apply(char *STRING, size_t LENGTH) { (const unsigned char* s2c_opening, size_t s2c_opening_len) };
 %apply(char *STRING, size_t LENGTH) { (const unsigned char* salt, size_t salt_len) };
 %apply(char *STRING, size_t LENGTH) { (const unsigned char* scalar, size_t scalar_len) };
+%apply(char *STRING, size_t LENGTH) { (const unsigned char* scan_key, size_t scan_key_len) };
 %apply(char *STRING, size_t LENGTH) { (const unsigned char* script, size_t script_len) };
 %apply(char *STRING, size_t LENGTH) { (const unsigned char* scriptpubkey, size_t scriptpubkey_len) };
 %apply(char *STRING, size_t LENGTH) { (const unsigned char* seckey, size_t seckey_len) };

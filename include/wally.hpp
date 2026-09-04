@@ -740,6 +740,18 @@ inline int descriptor_set_network(const DESCRIPTOR& descriptor, uint32_t network
     return detail::check_ret(__FUNCTION__, ret);
 }
 
+template <class BYTES, class HRP>
+inline int descriptor_sp_key_from_bytes(const BYTES& bytes, const HRP& hrp, char** output) {
+    int ret = ::wally_descriptor_sp_key_from_bytes(bytes.data(), bytes.size(), detail::get_p(hrp), output);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class KEY_EXPRESSION, class BYTES_OUT>
+inline int descriptor_sp_key_to_bytes(const KEY_EXPRESSION& key_expression, BYTES_OUT& bytes_out, size_t* written) {
+    int ret = ::wally_descriptor_sp_key_to_bytes(detail::get_p(key_expression), bytes_out.data(), bytes_out.size(), written);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
 template <class DESCRIPTOR>
 inline int descriptor_to_address(const DESCRIPTOR& descriptor, uint32_t variant, uint32_t multi_index, uint32_t child_num, uint32_t flags, char** output) {
     int ret = ::wally_descriptor_to_address(detail::get_p(descriptor), variant, multi_index, child_num, flags, output);
@@ -1471,6 +1483,12 @@ inline int psbt_add_input_keypath(const PSBT& psbt, uint32_t index, const PUB_KE
     return detail::check_ret(__FUNCTION__, ret);
 }
 
+template <class PSBT, class PUB_KEY, class FINGERPRINT, class CHILD_PATH>
+inline int psbt_add_input_sp_spend_keypath(const PSBT& psbt, uint32_t index, const PUB_KEY& pub_key, const FINGERPRINT& fingerprint, const CHILD_PATH& child_path) {
+    int ret = ::wally_psbt_add_input_sp_spend_keypath(detail::get_p(psbt), index, pub_key.data(), pub_key.size(), fingerprint.data(), fingerprint.size(), child_path.data(), child_path.size());
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
 template <class PSBT, class PUB_KEY, class TAPLEAF_HASHES, class FINGERPRINT, class CHILD_PATH>
 inline int psbt_add_input_taproot_keypath(const PSBT& psbt, uint32_t index, uint32_t flags, const PUB_KEY& pub_key, const TAPLEAF_HASHES& tapleaf_hashes, const FINGERPRINT& fingerprint, const CHILD_PATH& child_path) {
     int ret = ::wally_psbt_add_input_taproot_keypath(detail::get_p(psbt), index, flags, pub_key.data(), pub_key.size(), tapleaf_hashes.data(), tapleaf_hashes.size(), fingerprint.data(), fingerprint.size(), child_path.data(), child_path.size());
@@ -1539,6 +1557,18 @@ inline int psbt_finalize(const PSBT& psbt, uint32_t flags) {
 template <class PSBT>
 inline int psbt_finalize_input(const PSBT& psbt, size_t index, uint32_t flags) {
     int ret = ::wally_psbt_finalize_input(detail::get_p(psbt), index, flags);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT, class SCAN_KEY>
+inline int psbt_find_global_sp_dleq_proof(const PSBT& psbt, const SCAN_KEY& scan_key, size_t* written) {
+    int ret = ::wally_psbt_find_global_sp_dleq_proof(detail::get_p(psbt), scan_key.data(), scan_key.size(), written);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT, class SCAN_KEY>
+inline int psbt_find_global_sp_ecdh_share(const PSBT& psbt, const SCAN_KEY& scan_key, size_t* written) {
+    int ret = ::wally_psbt_find_global_sp_ecdh_share(detail::get_p(psbt), scan_key.data(), scan_key.size(), written);
     return detail::check_ret(__FUNCTION__, ret);
 }
 
@@ -1620,6 +1650,18 @@ inline int psbt_get_input_signing_script_len(const PSBT& psbt, size_t index, siz
 }
 
 template <class PSBT>
+inline int psbt_get_input_sp_eligible(const PSBT& psbt, size_t index, size_t* written) {
+    int ret = ::wally_psbt_get_input_sp_eligible(detail::get_p(psbt), index, written);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT, class HDKEY, class BYTES_OUT>
+inline int psbt_get_input_sp_spend_key(const PSBT& psbt, size_t index, const HDKEY& hdkey, BYTES_OUT& bytes_out) {
+    int ret = ::wally_psbt_get_input_sp_spend_key(detail::get_p(psbt), index, detail::get_p(hdkey), bytes_out.data(), bytes_out.size());
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT>
 inline int psbt_get_length(const PSBT& psbt, uint32_t flags, size_t* written) {
     int ret = ::wally_psbt_get_length(detail::get_p(psbt), flags, written);
     return detail::check_ret(__FUNCTION__, ret);
@@ -1628,6 +1670,18 @@ inline int psbt_get_length(const PSBT& psbt, uint32_t flags, size_t* written) {
 template <class PSBT>
 inline int psbt_get_locktime(const PSBT& psbt, size_t* written) {
     int ret = ::wally_psbt_get_locktime(detail::get_p(psbt), written);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT, class BYTES_OUT>
+inline int psbt_get_sp_smallest_outpoint(const PSBT& psbt, BYTES_OUT& bytes_out) {
+    int ret = ::wally_psbt_get_sp_smallest_outpoint(detail::get_p(psbt), bytes_out.data(), bytes_out.size());
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT>
+inline int psbt_get_sp_status(const PSBT& psbt, uint32_t flags, size_t* written) {
+    int ret = ::wally_psbt_get_sp_status(detail::get_p(psbt), flags, written);
     return detail::check_ret(__FUNCTION__, ret);
 }
 
@@ -1891,6 +1945,12 @@ inline int psbt_input_set_witness_utxo_from_tx(const INPUT& input, const UTXO& u
     return detail::check_ret(__FUNCTION__, ret);
 }
 
+template <class INPUT, class PUB_KEY, class FINGERPRINT, class CHILD_PATH>
+inline int psbt_input_sp_spend_keypath_add(const INPUT& input, const PUB_KEY& pub_key, const FINGERPRINT& fingerprint, const CHILD_PATH& child_path) {
+    int ret = ::wally_psbt_input_sp_spend_keypath_add(detail::get_p(input), pub_key.data(), pub_key.size(), fingerprint.data(), fingerprint.size(), child_path.data(), child_path.size());
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
 template <class INPUT, class PUB_KEY, class TAPLEAF_HASHES, class FINGERPRINT, class CHILD_PATH>
 inline int psbt_input_taproot_keypath_add(const INPUT& input, const PUB_KEY& pub_key, const TAPLEAF_HASHES& tapleaf_hashes, const FINGERPRINT& fingerprint, const CHILD_PATH& child_path) {
     int ret = ::wally_psbt_input_taproot_keypath_add(detail::get_p(input), pub_key.data(), pub_key.size(), tapleaf_hashes.data(), tapleaf_hashes.size(), fingerprint.data(), fingerprint.size(), child_path.data(), child_path.size());
@@ -2105,6 +2165,24 @@ inline int psbt_signing_cache_enable(const PSBT& psbt, uint32_t flags) {
     return detail::check_ret(__FUNCTION__, ret);
 }
 
+template <class PSBT, class INDICES, class PRIV_KEYS, class ENTROPY>
+inline int psbt_sp_contribute(const PSBT& psbt, const INDICES& indices, const PRIV_KEYS& priv_keys, const ENTROPY& entropy, uint32_t flags) {
+    int ret = ::wally_psbt_sp_contribute(detail::get_p(psbt), indices.data(), indices.size(), priv_keys.data(), priv_keys.size(), entropy.data(), entropy.size(), flags);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT, class PRIV_KEYS, class ENTROPY>
+inline int psbt_sp_resolve(const PSBT& psbt, const PRIV_KEYS& priv_keys, const ENTROPY& entropy, uint32_t flags) {
+    int ret = ::wally_psbt_sp_resolve(detail::get_p(psbt), priv_keys.data(), priv_keys.size(), entropy.data(), entropy.size(), flags);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class PSBT>
+inline int psbt_sp_resolve_shares(const PSBT& psbt, uint32_t flags) {
+    int ret = ::wally_psbt_sp_resolve_shares(detail::get_p(psbt), flags);
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
 template <class PSBT>
 inline int psbt_to_base64(const PSBT& psbt, uint32_t flags, char** output) {
     int ret = ::wally_psbt_to_base64(detail::get_p(psbt), flags, output);
@@ -2257,6 +2335,12 @@ inline int sha256d(const BYTES& bytes, BYTES_OUT& bytes_out) {
 template <class BYTES, class BYTES_OUT>
 inline int sha512(const BYTES& bytes, BYTES_OUT& bytes_out) {
     int ret = ::wally_sha512(bytes.data(), bytes.size(), bytes_out.data(), bytes_out.size());
+    return detail::check_ret(__FUNCTION__, ret);
+}
+
+template <class BYTES, class ADDR_FAMILY>
+inline int sp_address_from_bytes(const BYTES& bytes, const ADDR_FAMILY& addr_family, uint32_t flags, char** output) {
+    int ret = ::wally_sp_address_from_bytes(bytes.data(), bytes.size(), detail::get_p(addr_family), flags, output);
     return detail::check_ret(__FUNCTION__, ret);
 }
 

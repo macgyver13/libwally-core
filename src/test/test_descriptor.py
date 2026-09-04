@@ -1046,5 +1046,124 @@ class DescriptorTests(unittest.TestCase):
         self.assertNotEqual(ret, WALLY_OK, 'Script-leaf musig() should be rejected until implemented')
 
 
+    def test_silent_payments(self):
+        """Test BIP-392 sp() descriptors"""
+        origin_fp = 'd34db33f'
+        origin_path = "352h/0h/0h"
+        origin = f'[{origin_fp}/{origin_path}]'
+        # Scan private key/spend public key from the BIP-352 test vectors
+        spscan = 'spscan1qpa55up5q9zn30790dw2pr7dpx0wn2ef9su2vcgn9jje5mwgvrukqyhxfs4kklqm4x58pywtcm2kzqrpxpj6mtt5rzpk2hyzgfhxclnekj2vrpm'
+        tspscan = 'tspscan1qpa55up5q9zn30790dw2pr7dpx0wn2ef9su2vcgn9jje5mwgvrukqyhxfs4kklqm4x58pywtcm2kzqrpxpj6mtt5rzpk2hyzgfhxclnek52ph3p'
+        spspend = 'spspend1qpa55up5q9zn30790dw2pr7dpx0wn2ef9su2vcgn9jje5mwgvrukf6yaz5j546e96nf8nc8322026058jk8yw8a99kmra360s5xev84qm67sry'
+        xpub = 'xpub661MyMwAqRbcFW31YEwpkMuc5THy2PSt5bDMsktWQcFF8syAmRUapSCGu8ED9W6oDMSgv6Zz8idoc4a6mr8BDzTJY47LJhkJ8UB7WEGuduB'
+        d = c_void_p()
+
+        # Valid: the scan key is always private and never derivable
+        expected_features = MS_IS_DESCRIPTOR|MS_IS_PRIVATE|MS_IS_RAW
+        for descriptor, key, network in [
+            (f'sp({spscan})',          spscan,  NETWORK_BTC_MAIN),
+            (f'sp({origin}{spscan})',  spscan,  NETWORK_BTC_MAIN),
+            (f'sp({spspend})',         spspend, NETWORK_BTC_MAIN),
+            (f'sp({tspscan})',         tspscan, NETWORK_BTC_TEST),
+        ]:
+            ret = wally_descriptor_parse(descriptor, None, network, 0, d)
+            self.assertEqual(ret, WALLY_OK)
+            ret, features = wally_descriptor_get_features(d)
+            self.assertEqual(ret, WALLY_OK)
+            self.assertEqual(features & expected_features, expected_features)
+            # The key is returned as its original bech32m text
+            ret, num_keys = wally_descriptor_get_num_keys(d)
+            self.assertEqual((ret, num_keys), (WALLY_OK, 1))
+            ret, key_str = wally_descriptor_get_key(d, 0)
+            self.assertEqual((ret, key_str), (WALLY_OK, key))
+            # sp() cannot generate a script without the sender's input keys
+            script, script_len = make_cbuffer('00' * 64)
+            ret, _ = wally_descriptor_to_script(d, 0, 0, 0, 0, 0, 0, script, script_len)
+            self.assertEqual(ret, WALLY_ERROR)
+            wally_descriptor_free(d)
+
+        # The key origin is readable
+        ret = wally_descriptor_parse(f'sp({origin}{spscan})', None, NETWORK_BTC_MAIN, 0, d)
+        self.assertEqual(ret, WALLY_OK)
+        buf, buf_len = make_cbuffer('0' * 8)
+        self.assertEqual(wally_descriptor_get_key_origin_fingerprint(d, 0, buf, buf_len), WALLY_OK)
+        self.assertEqual(wally_hex_from_bytes(buf, buf_len), (WALLY_OK, origin_fp))
+        self.assertEqual(wally_descriptor_get_key_origin_path_str(d, 0), (WALLY_OK, origin_path))
+        wally_descriptor_free(d)
+
+        # Checksums round-trip
+        ret = wally_descriptor_parse(f'sp({spscan})', None, NETWORK_BTC_MAIN, 0, d)
+        self.assertEqual(ret, WALLY_OK)
+        ret, checksum = wally_descriptor_get_checksum(d, 0)
+        self.assertEqual(ret, WALLY_OK)
+        wally_descriptor_free(d)
+        ret = wally_descriptor_parse(f'sp({spscan})#{checksum}', None, NETWORK_BTC_MAIN,
+                                     REQUIRE_CHECKSUM, d)
+        self.assertEqual(ret, WALLY_OK)
+        wally_descriptor_free(d)
+
+        # Invalid
+        for descriptor in [
+            'sp()',                              # Requires a key expression
+            f'sp({xpub})',                       # Must be an spscan/spspend key
+            f'sp({spscan},{spscan})',            # Two argument form is unsupported
+            f'sh(sp({spscan}))',                 # sp() is top level only
+            f'wsh(sp({spscan}))',                # sp() is top level only
+            f'tr(sp({spscan}))',                 # sp() is top level only
+            f'wpkh({spscan})',                   # spscan keys are sp() only
+            f'pk({spscan})',                     # spscan keys are sp() only
+            # Bech32 (not bech32m), silent payments v1, and a truncated payload
+            'sp(spscan1qpa55up5q9zn30790dw2pr7dpx0wn2ef9su2vcgn9jje5mwgvrukqyhxfs4kklqm4x58pywtcm2kzqrpxpj6mtt5rzpk2hyzgfhxclnek8ku0ye)',
+            'sp(spscan1ppa55up5q9zn30790dw2pr7dpx0wn2ef9su2vcgn9jje5mwgvrukqyhxfs4kklqm4x58pywtcm2kzqrpxpj6mtt5rzpk2hyzgfhxclnekssv8gg)',
+            'sp(spscan1qpa55up5q9zn30790dw2pr7dpx0wn2ef9su2vcgn9jje5mwgvrukqfam8z0)',
+        ]:
+            ret = wally_descriptor_parse(descriptor, None, NETWORK_BTC_MAIN, 0, d)
+            self.assertEqual(ret, WALLY_EINVAL, descriptor)
+
+        # Creating the same key expressions from their payloads
+        scan_key, scan_key_len = make_cbuffer(
+            '0f694e068028a717f8af6b9411f9a133dd3565258714cc226594b34db90c1f2c'
+            '025cc9856d6f8375350e123978daac200c260cb5b5ae83106cab90484dcd8fcf36')
+        spend_key, spend_key_len = make_cbuffer(
+            '0f694e068028a717f8af6b9411f9a133dd3565258714cc226594b34db90c1f2c'
+            '9d13a2a4a95d64ba9a4f3c1e2a53d5a7d0f2b1c8e3f4a5b6c7d8e9f0a1b2c3d4')
+
+        for key, key_len, hrp, expected in [
+            (scan_key, scan_key_len, 'spscan', spscan),
+            (scan_key, scan_key_len, 'tspscan', tspscan),
+            (spend_key, spend_key_len, 'spspend', spspend),
+        ]:
+            ret, key_str = wally_descriptor_sp_key_from_bytes(key, key_len, utf8(hrp))
+            self.assertEqual((ret, key_str), (WALLY_OK, expected))
+            # And the result must parse back as an sp() descriptor
+            network = NETWORK_BTC_TEST if hrp[0] == 't' else NETWORK_BTC_MAIN
+            ret = wally_descriptor_parse(f'sp({key_str})', None, network, 0, d)
+            self.assertEqual(ret, WALLY_OK, key_str)
+            wally_descriptor_free(d)
+
+        # And the round trip back to the payload
+        for key_str, expected, expected_len in [(spscan, scan_key, scan_key_len),
+                                                (tspscan, scan_key, scan_key_len),
+                                                (spspend, spend_key, spend_key_len)]:
+            out, out_len = make_cbuffer('00' * 65)
+            ret, written = wally_descriptor_sp_key_to_bytes(utf8(key_str), out, out_len)
+            self.assertEqual((ret, written), (WALLY_OK, expected_len))
+            self.assertEqual(h(out[:written]), h(expected[:expected_len]))
+
+        for args in [(None, None, 65), (utf8(spscan), None, 65),
+                     (utf8(spscan), make_cbuffer('00' * 65)[0], 64),   # Buffer too small
+                     (utf8('spqqq1qqq'), make_cbuffer('00' * 65)[0], 65),  # Unknown type
+                     (utf8('not a key'), make_cbuffer('00' * 65)[0], 65)]:
+            self.assertEqual(wally_descriptor_sp_key_to_bytes(*args), (WALLY_EINVAL, 0))
+
+        for args in [(None, scan_key_len, utf8('spscan')),        # Missing payload
+                     (scan_key, spend_key_len, utf8('spscan')),   # Wrong length for hrp
+                     (spend_key, spend_key_len, utf8('spscan')),  # Wrong length for hrp
+                     (scan_key, scan_key_len, utf8('spqqq')),     # Unknown key type
+                     (scan_key, scan_key_len, utf8('sp')),        # An address, not a key
+                     (scan_key, scan_key_len, None)]:             # Missing hrp
+            self.assertEqual(wally_descriptor_sp_key_from_bytes(*args), (WALLY_EINVAL, None))
+
+
 if __name__ == '__main__':
     unittest.main()
