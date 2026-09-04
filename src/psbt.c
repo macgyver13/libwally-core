@@ -395,6 +395,7 @@ MAP_INNER_FIELD(input, witness_script, PSBT_IN_WITNESS_SCRIPT, psbt_fields)
 MAP_INNER_FIELD(input, final_scriptsig, PSBT_IN_FINAL_SCRIPTSIG, psbt_fields)
 MAP_INNER_FIELD(input, taproot_signature, PSBT_IN_TAP_KEY_SIG, psbt_fields)
 MAP_INNER_FIELD(input, taproot_internal_key, PSBT_IN_TAP_INTERNAL_KEY, psbt_fields)
+MAP_INNER_FIELD(input, sp_tweak, PSBT_IN_SP_TWEAK, psbt_fields)
 SET_STRUCT(wally_psbt_input, final_witness, wally_tx_witness_stack,
            wally_tx_witness_stack_clone_alloc, wally_tx_witness_stack_free)
 SET_MAP(wally_psbt_input, keypath,)
@@ -767,6 +768,9 @@ static int psbt_input_field_verify(uint32_t field_type,
         case PSBT_IN_TAP_MERKLE_ROOT:
             /* 32 byte x-only pubkey, or 32 byte merkle hash */
             return val_len == SHA256_LEN ? WALLY_OK : WALLY_EINVAL;
+        case PSBT_IN_SP_TWEAK:
+            /* 32 byte BIP-376 tweak, added to the spend key to sign with */
+            return val_len == EC_PRIVATE_KEY_LEN ? WALLY_OK : WALLY_EINVAL;
         default:
             break;
         }
@@ -828,6 +832,24 @@ static int psbt_map_input_field_verify(const unsigned char *key, size_t key_len,
     return key ? WALLY_EINVAL : psbt_input_field_verify(key_len, val, val_len);
 }
 
+static int sp_ecdh_share_verify(const unsigned char *key, size_t key_len,
+                                const unsigned char *val, size_t val_len)
+{
+    if (wally_ec_public_key_verify(key, key_len) != WALLY_OK ||
+        val_len != EC_PUBLIC_KEY_LEN)
+        return WALLY_EINVAL;
+    return wally_ec_public_key_verify(val, val_len);
+}
+
+static int sp_dleq_verify(const unsigned char *key, size_t key_len,
+                          const unsigned char *val, size_t val_len)
+{
+    if (wally_ec_public_key_verify(key, key_len) != WALLY_OK ||
+        !val || val_len != SP_DLEQ_PROOF_LEN)
+        return WALLY_EINVAL;
+    return WALLY_OK;
+}
+
 static int psbt_output_field_verify(uint32_t field_type,
                                     const unsigned char *val, size_t val_len)
 {
@@ -840,7 +862,16 @@ static int psbt_output_field_verify(uint32_t field_type,
         /* 32 byte x-only pubkey */
         return val && val_len == SHA256_LEN ? WALLY_OK : WALLY_EINVAL;
     case PSBT_OUT_TAP_TREE:
-        return taproot_tree_value_verify(val, val_len);
+        /* FIXME: validate the tree is in the expected encoded format */
+        return val && val_len >= 4 ? WALLY_OK : WALLY_EINVAL;
+    case PSBT_OUT_SP_V0_INFO:
+        if (!val || val_len != EC_PUBLIC_KEY_LEN * 2 ||
+            wally_ec_public_key_verify(val, EC_PUBLIC_KEY_LEN) != WALLY_OK)
+            return WALLY_EINVAL;
+        return wally_ec_public_key_verify(val + EC_PUBLIC_KEY_LEN,
+                                          EC_PUBLIC_KEY_LEN);
+    case PSBT_OUT_SP_V0_LABEL:
+        return val && val_len == sizeof(uint32_t) ? WALLY_OK : WALLY_EINVAL;
     default:
         break;
     }
@@ -1106,6 +1137,9 @@ static void psbt_input_init(struct wally_psbt_input *input)
     wally_map_init(0, musig2_participant_pubkeys_verify, &input->musig2_pubkeys);
     wally_map_init(0, musig2_pubnonce_verify, &input->musig2_pubnonces);
     wally_map_init(0, musig2_partial_sig_verify, &input->musig2_partial_sigs);
+    wally_map_init(0, sp_ecdh_share_verify, &input->sp_ecdh_shares);
+    wally_map_init(0, sp_dleq_verify, &input->sp_dleq_proofs);
+    wally_map_init(0, wally_keypath_public_key_verify, &input->sp_spend_keypaths);
 #ifdef BUILD_ELEMENTS
     wally_map_init(0, pset_map_input_field_verify, &input->pset_fields);
 #endif /* BUILD_ELEMENTS */
@@ -1129,6 +1163,9 @@ static int psbt_input_free(struct wally_psbt_input *input, bool free_parent)
         wally_map_clear(&input->musig2_pubkeys);
         wally_map_clear(&input->musig2_pubnonces);
         wally_map_clear(&input->musig2_partial_sigs);
+        wally_map_clear(&input->sp_ecdh_shares);
+        wally_map_clear(&input->sp_dleq_proofs);
+        wally_map_clear(&input->sp_spend_keypaths);
 #ifdef BUILD_ELEMENTS
         wally_tx_free(input->pegin_tx);
         wally_tx_witness_stack_free(input->pegin_witness);
@@ -1153,6 +1190,8 @@ static void psbt_inputs_free(struct wally_psbt_input *inputs, size_t num_inputs)
 MAP_INNER_FIELD(output, redeem_script, PSBT_OUT_REDEEM_SCRIPT, psbt_fields)
 MAP_INNER_FIELD(output, witness_script, PSBT_OUT_WITNESS_SCRIPT, psbt_fields)
 MAP_INNER_FIELD(output, taproot_internal_key, PSBT_OUT_TAP_INTERNAL_KEY, psbt_fields)
+MAP_INNER_FIELD(output, sp_v0_info, PSBT_OUT_SP_V0_INFO, psbt_fields)
+MAP_INNER_FIELD(output, sp_v0_label, PSBT_OUT_SP_V0_LABEL, psbt_fields)
 SET_MAP(wally_psbt_output, keypath,)
 ADD_KEYPATH(wally_psbt_output)
 ADD_TAP_KEYPATH(wally_psbt_output)
@@ -1188,6 +1227,92 @@ int wally_psbt_output_set_amount(struct wally_psbt_output *output, uint64_t amou
     output->amount = amount;
     output->has_amount = 1u;
     return WALLY_OK;
+}
+
+/* BIP375 shares and proofs are keyed by scan pubkey, and are set one at a
+ * time as each recipient is resolved, so only set/find are provided here.
+ */
+#define SP_FIND_MAP(PARENT, NAME, FIELD) \
+    int PARENT ## _find_ ## NAME(const struct PARENT *parent, \
+                                 const unsigned char *scan_key, size_t scan_key_len, \
+                                 size_t *written) { \
+        if (written) *written = 0; \
+        if (!parent) return WALLY_EINVAL; \
+        return wally_map_find(&parent->FIELD, scan_key, scan_key_len, written); \
+    }
+
+SP_FIND_MAP(wally_psbt, global_sp_ecdh_share, global_sp_ecdh_shares)
+SP_FIND_MAP(wally_psbt, global_sp_dleq_proof, global_sp_dleq_proofs)
+SP_FIND_MAP(wally_psbt_input, sp_ecdh_share, sp_ecdh_shares)
+SP_FIND_MAP(wally_psbt_input, sp_dleq_proof, sp_dleq_proofs)
+
+/* BIP376 spend keypaths are keyed by spend pubkey. Only find/add are needed:
+ * an Updater adds one entry per spend key, and a Signer looks its own up.
+ */
+SP_FIND_MAP(wally_psbt_input, sp_spend_keypath, sp_spend_keypaths)
+
+int wally_psbt_input_sp_spend_keypath_add(struct wally_psbt_input *input,
+                                          const unsigned char *pub_key,
+                                          size_t pub_key_len,
+                                          const unsigned char *fingerprint,
+                                          size_t fingerprint_len,
+                                          const uint32_t *child_path,
+                                          size_t child_path_len)
+{
+    if (!input)
+        return WALLY_EINVAL;
+    return wally_map_keypath_add(&input->sp_spend_keypaths,
+                                 pub_key, pub_key_len,
+                                 fingerprint, fingerprint_len,
+                                 child_path, child_path_len);
+}
+
+int wally_psbt_input_set_sp_ecdh_share(struct wally_psbt_input *input,
+                                       const unsigned char *scan_key,
+                                       size_t scan_key_len,
+                                       const unsigned char *share,
+                                       size_t share_len)
+{
+    if (!input)
+        return WALLY_EINVAL;
+    return wally_map_replace(&input->sp_ecdh_shares, scan_key,
+                             scan_key_len, share, share_len);
+}
+
+int wally_psbt_input_set_sp_dleq_proof(struct wally_psbt_input *input,
+                                       const unsigned char *scan_key,
+                                       size_t scan_key_len,
+                                       const unsigned char *proof,
+                                       size_t proof_len)
+{
+    if (!input)
+        return WALLY_EINVAL;
+    return wally_map_replace(&input->sp_dleq_proofs, scan_key,
+                             scan_key_len, proof, proof_len);
+}
+
+int wally_psbt_set_global_sp_ecdh_share(struct wally_psbt *psbt,
+                                        const unsigned char *scan_key,
+                                        size_t scan_key_len,
+                                        const unsigned char *share,
+                                        size_t share_len)
+{
+    if (!psbt)
+        return WALLY_EINVAL;
+    return wally_map_replace(&psbt->global_sp_ecdh_shares, scan_key,
+                             scan_key_len, share, share_len);
+}
+
+int wally_psbt_set_global_sp_dleq_proof(struct wally_psbt *psbt,
+                                        const unsigned char *scan_key,
+                                        size_t scan_key_len,
+                                        const unsigned char *proof,
+                                        size_t proof_len)
+{
+    if (!psbt)
+        return WALLY_EINVAL;
+    return wally_map_replace(&psbt->global_sp_dleq_proofs, scan_key,
+                             scan_key_len, proof, proof_len);
 }
 
 int wally_psbt_output_clear_amount(struct wally_psbt_output *output)
@@ -1493,6 +1618,10 @@ static int psbt_init(uint32_t version, size_t num_inputs, size_t num_outputs,
     ret = wally_map_init(num_unknowns, NULL, &psbt_out->unknowns);
     if (ret == WALLY_OK)
         ret = wally_map_init(0, wally_keypath_bip32_verify, &psbt_out->global_xpubs);
+    if (ret == WALLY_OK)
+        ret = wally_map_init(0, sp_ecdh_share_verify, &psbt_out->global_sp_ecdh_shares);
+    if (ret == WALLY_OK)
+        ret = wally_map_init(0, sp_dleq_verify, &psbt_out->global_sp_dleq_proofs);
 #ifdef BUILD_ELEMENTS
     if (ret == WALLY_OK)
         ret = wally_map_init(0, scalar_verify, &psbt_out->global_scalars);
@@ -1504,6 +1633,8 @@ static int psbt_init(uint32_t version, size_t num_inputs, size_t num_outputs,
         wally_free(psbt_out->inputs);
         wally_free(psbt_out->outputs);
         wally_map_clear(&psbt_out->unknowns);
+        wally_map_clear(&psbt_out->global_sp_ecdh_shares);
+        wally_map_clear(&psbt_out->global_sp_dleq_proofs);
         wally_clear(psbt_out, sizeof(*psbt_out));
         return ret != WALLY_OK ? ret : WALLY_ENOMEM;
     }
@@ -1606,6 +1737,8 @@ int wally_psbt_free(struct wally_psbt *psbt)
 
         wally_map_clear(&psbt->unknowns);
         wally_map_clear(&psbt->global_xpubs);
+        wally_map_clear(&psbt->global_sp_ecdh_shares);
+        wally_map_clear(&psbt->global_sp_dleq_proofs);
 #ifdef BUILD_ELEMENTS
         wally_map_clear(&psbt->global_scalars);
 #endif /* BUILD_ELEMENTS */
@@ -2047,6 +2180,21 @@ int wally_psbt_add_input_keypath(
     return wally_psbt_input_keypath_add(inp, pub_key, pub_key_len,
                                         fingerprint, fingerprint_len,
                                         child_path, child_path_len);
+}
+
+int wally_psbt_add_input_sp_spend_keypath(
+    struct wally_psbt *psbt, uint32_t index,
+    const unsigned char *pub_key, size_t pub_key_len,
+    const unsigned char *fingerprint, size_t fingerprint_len,
+    const uint32_t *child_path, size_t child_path_len)
+{
+    struct wally_psbt_input *inp = psbt_get_input(psbt, index);
+    if (!inp || !psbt_is_valid(psbt) || psbt->version != PSBT_2)
+        return WALLY_EINVAL;
+
+    return wally_psbt_input_sp_spend_keypath_add(inp, pub_key, pub_key_len,
+                                                 fingerprint, fingerprint_len,
+                                                 child_path, child_path_len);
 }
 
 int wally_psbt_add_input_taproot_keypath(
@@ -2671,7 +2819,7 @@ static int pull_psbt_input(const struct wally_psbt *psbt,
         uint64_t field_type = pull_field_type(cursor, max, &key, &key_len, is_pset, &is_pset_ft);
         const uint64_t raw_field_type = field_type;
         uint64_t field_bit = 0;
-        bool is_known;
+        bool is_known, has_keydata;
 
         if (is_pset_ft) {
             is_known = field_type <= PSET_IN_MAX;
@@ -2679,11 +2827,33 @@ static int pull_psbt_input(const struct wally_psbt *psbt,
                 field_type = PSET_FT(field_type);
                 field_bit = field_type;
             }
+            has_keydata = !!(field_bit & PSBT_IN_HAVE_KEYDATA);
         } else {
             is_known = field_type <= PSBT_IN_MAX &&
                        field_type != PSBT_IN_RESERVED_0X19;
-            if (is_known)
-                field_bit = PSBT_FT(field_type);
+            if (is_known && field_type >= PSBT_FT_LIMIT) {
+                /* Fields at or above PSBT_FT_LIMIT have no mask bit of their
+                 * own (see psbt_io.h), so the duplicate/keydata/version rules
+                 * the masks encode are applied by hand here instead. All of
+                 * them are v2 only. PSBT_IN_SP_TWEAK is a single bare value,
+                 * so it carries no keydata and cannot repeat; the aggregate
+                 * fields are keyed by scan pubkey and repeat once per signer.
+                 */
+                if (psbt->version == PSBT_0) {
+                    ret = WALLY_EINVAL; /* v2-only field */
+                    break;
+                }
+                has_keydata = field_type != PSBT_IN_SP_TWEAK;
+                if (!has_keydata &&
+                    wally_map_get_integer(&result->psbt_fields, field_type)) {
+                    ret = WALLY_EINVAL; /* Duplicate non-repeatable field */
+                    break;
+                }
+            } else {
+                if (is_known)
+                    field_bit = PSBT_FT(field_type);
+                has_keydata = !!(field_bit & PSBT_IN_HAVE_KEYDATA);
+            }
         }
 
         /* Process based on type */
@@ -2693,7 +2863,7 @@ static int pull_psbt_input(const struct wally_psbt *psbt,
                 break;
             }
             keyset |= field_bit;
-            if (field_bit & PSBT_IN_HAVE_KEYDATA)
+            if (has_keydata)
                 pull_subfield_end(cursor, max, key, key_len);
             else
                 subfield_nomore_end(cursor, max, key, key_len);
@@ -2730,6 +2900,7 @@ static int pull_psbt_input(const struct wally_psbt *psbt,
             case PSBT_IN_TAP_KEY_SIG:
             case PSBT_IN_TAP_INTERNAL_KEY:
             case PSBT_IN_TAP_MERKLE_ROOT:
+            case PSBT_IN_SP_TWEAK:
                 pull_varlength_buff(cursor, max, &val_p, &val_len);
                 ret = wally_map_add_integer(&result->psbt_fields, raw_field_type,
                                             val_p, val_len);
@@ -2775,6 +2946,18 @@ static int pull_psbt_input(const struct wally_psbt *psbt,
                 break;
             case PSBT_IN_MUSIG2_PARTIAL_SIG:
                 ret = pull_map_item(cursor, max, key, key_len, &result->musig2_partial_sigs);
+                break;
+            case PSBT_IN_SP_ECDH_SHARE:
+                ret = pull_map_item(cursor, max, key, key_len,
+                                    &result->sp_ecdh_shares);
+                break;
+            case PSBT_IN_SP_DLEQ:
+                ret = pull_map_item(cursor, max, key, key_len,
+                                    &result->sp_dleq_proofs);
+                break;
+            case PSBT_IN_SP_SPEND_BIP32_DERIVATION:
+                ret = pull_map_item(cursor, max, key, key_len,
+                                    &result->sp_spend_keypaths);
                 break;
 #ifdef BUILD_ELEMENTS
             case PSET_FT(PSET_IN_EXPLICIT_VALUE):
@@ -2900,9 +3083,10 @@ static int pull_psbt_output(const struct wally_psbt *psbt,
                 field_bit = field_type;
             }
         } else {
-            is_known = field_type <= PSBT_OUT_MAX;
-            if (is_known)
+            is_known = field_type < 32;
+            if (is_known) {
                 field_bit = PSBT_FT(field_type);
+            }
         }
 
         /* Process based on type */
@@ -2931,6 +3115,8 @@ static int pull_psbt_output(const struct wally_psbt *psbt,
             case PSBT_OUT_REDEEM_SCRIPT:
             case PSBT_OUT_WITNESS_SCRIPT:
             case PSBT_OUT_TAP_INTERNAL_KEY:
+            case PSBT_OUT_SP_V0_INFO:
+            case PSBT_OUT_SP_V0_LABEL:
                 pull_varlength_buff(cursor, max, &val_p, &val_len);
                 ret = wally_map_add_integer(&result->psbt_fields, raw_field_type,
                                             val_p, val_len);
@@ -2991,6 +3177,17 @@ unknown:
             ret = WALLY_EINVAL; /* Mandatory field is missing*/
         else if (disallowed && (keyset & disallowed))
             ret = WALLY_EINVAL; /* Disallowed field present */
+        else if (!is_pset && psbt->version == PSBT_2 &&
+                 !(keyset & PSBT_FT(PSBT_OUT_SCRIPT)) &&
+                 !(keyset & PSBT_FT(PSBT_OUT_SP_V0_INFO)))
+            ret = WALLY_EINVAL; /* Script or silent payment info is mandatory */
+        else if (!is_pset && (keyset & PSBT_FT(PSBT_OUT_SP_V0_LABEL)) &&
+                 !(keyset & PSBT_FT(PSBT_OUT_SP_V0_INFO)))
+            ret = WALLY_EINVAL; /* Silent payment label requires payment info */
+        else if (!is_pset && (keyset & PSBT_FT(PSBT_OUT_SP_V0_INFO)) &&
+                 result->script_len &&
+                 (psbt->tx_modifiable_flags & PSBT_TXMOD_MODIFIABLE_FLAGS))
+            ret = WALLY_EINVAL; /* Resolved outputs must not be modifiable */
     }
 #ifdef BUILD_ELEMENTS
     if (ret == WALLY_OK && is_pset) {
@@ -3055,7 +3252,9 @@ int wally_psbt_from_bytes(const unsigned char *bytes, size_t len,
                 field_bit = field_type;
             }
         } else {
-            is_known = field_type <= PSBT_GLOBAL_MAX || field_type == PSBT_GLOBAL_VERSION;
+            is_known = field_type <= PSBT_GLOBAL_TX_MODIFIABLE ||
+                       (!is_pset && field_type <= PSBT_GLOBAL_MAX) ||
+                       field_type == PSBT_GLOBAL_VERSION;
             if (is_known) {
                 if (field_type == PSBT_GLOBAL_VERSION)
                     field_bit = PSBT_GLOBAL_VERSION_BIT;
@@ -3110,6 +3309,14 @@ int wally_psbt_from_bytes(const unsigned char *bytes, size_t len,
                 (*output)->tx_modifiable_flags = pull_u8_subfield(cursor, max);
                 if ((*output)->tx_modifiable_flags & ~PSBT_TXMOD_ALL_FLAGS)
                     ret = WALLY_EINVAL; /* Invalid flags */
+                break;
+            case PSBT_GLOBAL_SP_ECDH_SHARE:
+                ret = pull_map_item(cursor, max, key, key_len,
+                                    &(*output)->global_sp_ecdh_shares);
+                break;
+            case PSBT_GLOBAL_SP_DLEQ:
+                ret = pull_map_item(cursor, max, key, key_len,
+                                    &(*output)->global_sp_dleq_proofs);
                 break;
 #ifdef BUILD_ELEMENTS
             case PSET_FT(PSET_GLOBAL_SCALAR): {
@@ -3465,6 +3672,12 @@ static int push_psbt_input(const struct wally_psbt *psbt,
     int ret;
     const struct wally_map_item *final_scriptsig;
 
+    if ((is_pset || psbt->version == PSBT_0) &&
+        (input->sp_ecdh_shares.num_items || input->sp_dleq_proofs.num_items ||
+         input->sp_spend_keypaths.num_items ||
+         wally_map_get_integer(&input->psbt_fields, PSBT_IN_SP_TWEAK)))
+        return WALLY_EINVAL;
+
     /* Non witness utxo */
     if (input->utxo) {
         push_psbt_key(cursor, max, PSBT_IN_NON_WITNESS_UTXO, NULL, 0);
@@ -3594,6 +3807,19 @@ static int push_psbt_input(const struct wally_psbt *psbt,
     push_psbt_map(cursor, max, PSBT_IN_MUSIG2_PARTIAL_SIG, false,
                   &input->musig2_partial_sigs);
 
+    if (!is_pset) {
+        push_psbt_map(cursor, max, PSBT_IN_SP_ECDH_SHARE, false,
+                      &input->sp_ecdh_shares);
+        push_psbt_map(cursor, max, PSBT_IN_SP_DLEQ, false,
+                      &input->sp_dleq_proofs);
+        push_psbt_map(cursor, max, PSBT_IN_SP_SPEND_BIP32_DERIVATION, false,
+                      &input->sp_spend_keypaths);
+        if ((ret = push_varbuff_from_map(cursor, max, PSBT_IN_SP_TWEAK,
+                                         PSBT_IN_SP_TWEAK,
+                                         false, &input->psbt_fields)) != WALLY_OK)
+            return ret;
+    }
+
 #ifdef BUILD_ELEMENTS
     if (is_pset && psbt->version == PSBT_2) {
         uint32_t ft;
@@ -3652,7 +3878,13 @@ static int push_psbt_output(const struct wally_psbt *psbt,
 {
     size_t i;
     unsigned char dummy = 0;
+    const struct wally_map_item *sp_info;
     int ret;
+
+    if ((is_pset || psbt->version == PSBT_0) &&
+        (wally_map_get_integer(&output->psbt_fields, PSBT_OUT_SP_V0_INFO) ||
+         wally_map_get_integer(&output->psbt_fields, PSBT_OUT_SP_V0_LABEL)))
+        return WALLY_EINVAL;
 
     if ((ret = push_varbuff_from_map(cursor, max, PSBT_OUT_REDEEM_SCRIPT,
                                      PSBT_OUT_REDEEM_SCRIPT,
@@ -3668,16 +3900,24 @@ static int push_psbt_output(const struct wally_psbt *psbt,
     push_psbt_map(cursor, max, PSBT_OUT_BIP32_DERIVATION, false, &output->keypaths);
 
     if (psbt->version == PSBT_2) {
-        if (!is_pset && (!output->has_amount || !output->script || !output->script_len))
+        sp_info = wally_map_get_integer(&output->psbt_fields, PSBT_OUT_SP_V0_INFO);
+        if (!is_pset && (!output->has_amount || (!output->script_len && !sp_info)))
             return WALLY_EINVAL; /* Must be provided */
+        if (!is_pset &&
+            wally_map_get_integer(&output->psbt_fields, PSBT_OUT_SP_V0_LABEL) &&
+            !sp_info)
+            return WALLY_EINVAL; /* Silent payment label requires payment info */
+        if (!is_pset && sp_info && output->script_len &&
+            (psbt->tx_modifiable_flags & PSBT_TXMOD_MODIFIABLE_FLAGS))
+            return WALLY_EINVAL; /* Resolved outputs must not be modifiable */
 
         if (output->has_amount)
             push_psbt_le64(cursor, max, PSBT_OUT_AMOUNT, false, output->amount);
 
-        /* Core/Elements always write the script; if missing its written as empty */
-        push_psbt_varbuff(cursor, max, PSBT_OUT_SCRIPT, false,
-                          output->script ? output->script : &dummy,
-                          output->script_len);
+        if (is_pset || output->script_len)
+            push_psbt_varbuff(cursor, max, PSBT_OUT_SCRIPT, false,
+                              output->script ? output->script : &dummy,
+                              output->script_len);
     }
 
     if ((ret = push_varbuff_from_map(cursor, max, PSBT_OUT_TAP_INTERNAL_KEY,
@@ -3702,6 +3942,17 @@ static int push_psbt_output(const struct wally_psbt *psbt,
 
     push_psbt_map(cursor, max, PSBT_OUT_MUSIG2_PARTICIPANT_PUBKEYS, false,
                   &output->musig2_pubkeys);
+
+    if (!is_pset) {
+        if ((ret = push_varbuff_from_map(cursor, max, PSBT_OUT_SP_V0_INFO,
+                                         PSBT_OUT_SP_V0_INFO,
+                                         false, &output->psbt_fields)) != WALLY_OK)
+            return ret;
+        if ((ret = push_varbuff_from_map(cursor, max, PSBT_OUT_SP_V0_LABEL,
+                                         PSBT_OUT_SP_V0_LABEL,
+                                         false, &output->psbt_fields)) != WALLY_OK)
+            return ret;
+    }
 
 #ifdef BUILD_ELEMENTS
     if (is_pset && psbt->version == PSBT_2) {
@@ -3793,6 +4044,11 @@ int wally_psbt_to_bytes(const struct wally_psbt *psbt, uint32_t flags,
     if ((ret = wally_psbt_is_elements(psbt, &is_pset)) != WALLY_OK)
         return ret;
 
+    if ((is_pset || psbt->version == PSBT_0) &&
+        (psbt->global_sp_ecdh_shares.num_items ||
+         psbt->global_sp_dleq_proofs.num_items))
+        return WALLY_EINVAL;
+
     tx_flags = is_pset ? WALLY_TX_FLAG_USE_ELEMENTS : 0;
     push_bytes(&cursor, &max, psbt->magic, sizeof(psbt->magic));
 
@@ -3823,6 +4079,12 @@ int wally_psbt_to_bytes(const struct wally_psbt *psbt, uint32_t flags,
             push_psbt_key(&cursor, &max, PSBT_GLOBAL_TX_MODIFIABLE, NULL, 0);
             push_varint(&cursor, &max, sizeof(uint8_t));
             push_u8(&cursor, &max, psbt->tx_modifiable_flags & 0xff);
+        }
+        if (!is_pset) {
+            push_psbt_map(&cursor, &max, PSBT_GLOBAL_SP_ECDH_SHARE, false,
+                          &psbt->global_sp_ecdh_shares);
+            push_psbt_map(&cursor, &max, PSBT_GLOBAL_SP_DLEQ, false,
+                          &psbt->global_sp_dleq_proofs);
         }
 #ifdef BUILD_ELEMENTS
         push_psbt_map(&cursor, &max, PSET_GLOBAL_SCALAR, true, &psbt->global_scalars);
@@ -4049,6 +4311,12 @@ static int combine_input(struct wally_psbt_input *dst,
         return ret;
     if ((ret = wally_map_combine(&dst->psbt_fields, &src->psbt_fields)) != WALLY_OK)
         return ret;
+    if ((ret = wally_map_combine(&dst->sp_ecdh_shares, &src->sp_ecdh_shares)) != WALLY_OK)
+        return ret;
+    if ((ret = wally_map_combine(&dst->sp_dleq_proofs, &src->sp_dleq_proofs)) != WALLY_OK)
+        return ret;
+    if ((ret = wally_map_combine(&dst->sp_spend_keypaths, &src->sp_spend_keypaths)) != WALLY_OK)
+        return ret;
     if ((ret = combine_map_if_empty(&dst->taproot_leaf_signatures, &src->taproot_leaf_signatures)) != WALLY_OK)
         return ret;
     if ((ret = combine_map_if_empty(&dst->taproot_leaf_scripts, &src->taproot_leaf_scripts)) != WALLY_OK)
@@ -4249,6 +4517,14 @@ static int psbt_combine(struct wally_psbt *psbt, const struct wally_psbt *src,
 
     if (ret == WALLY_OK)
         ret = wally_map_combine(&psbt->global_xpubs, &src->global_xpubs);
+
+    if (ret == WALLY_OK)
+        ret = wally_map_combine(&psbt->global_sp_ecdh_shares,
+                                &src->global_sp_ecdh_shares);
+
+    if (ret == WALLY_OK)
+        ret = wally_map_combine(&psbt->global_sp_dleq_proofs,
+                                &src->global_sp_dleq_proofs);
 
 #ifdef BUILD_ELEMENTS
     if (ret == WALLY_OK && is_pset) {
@@ -4453,6 +4729,21 @@ static int psbt_build_output(const struct wally_psbt_output *src,
     }
     if (!src->has_amount)
         return WALLY_EINVAL;
+    /* wally_psbt_get_id builds with unblinded set. BIP375 requires the
+     * address data, rather than a present or computed script, in that ID. */
+    if (unblinded && !is_pset) {
+        const struct wally_map_item *sp_info;
+        sp_info = wally_map_get_integer(&src->psbt_fields, PSBT_OUT_SP_V0_INFO);
+        if (sp_info) {
+            unsigned char pseudo_script[1 + EC_PUBLIC_KEY_LEN * 2];
+            pseudo_script[0] = 0;
+            memcpy(pseudo_script + 1, sp_info->value, sp_info->value_len);
+            return wally_tx_add_raw_output(tx, src->amount,
+                                           pseudo_script, sizeof(pseudo_script), 0);
+        }
+    }
+    if (!src->script_len)
+        return WALLY_EINVAL; /* An unresolved silent payment is not extractable */
     return wally_tx_add_raw_output(tx, src->amount, src->script, src->script_len, 0);
 }
 
@@ -4541,7 +4832,28 @@ static int psbt_v2_to_v0(struct wally_psbt *psbt)
 {
     size_t i;
     bool is_pset;
-    int ret = psbt_build_tx(psbt, &psbt->tx, &is_pset, false);
+    int ret;
+
+    if (psbt->global_sp_ecdh_shares.num_items ||
+        psbt->global_sp_dleq_proofs.num_items)
+        return WALLY_EINVAL;
+    for (i = 0; i < psbt->num_inputs; ++i) {
+        if (psbt->inputs[i].sp_ecdh_shares.num_items ||
+            psbt->inputs[i].sp_dleq_proofs.num_items ||
+            psbt->inputs[i].sp_spend_keypaths.num_items ||
+            wally_map_get_integer(&psbt->inputs[i].psbt_fields,
+                                  PSBT_IN_SP_TWEAK))
+            return WALLY_EINVAL;
+    }
+    for (i = 0; i < psbt->num_outputs; ++i) {
+        if (wally_map_get_integer(&psbt->outputs[i].psbt_fields,
+                                  PSBT_OUT_SP_V0_INFO) ||
+            wally_map_get_integer(&psbt->outputs[i].psbt_fields,
+                                  PSBT_OUT_SP_V0_LABEL))
+            return WALLY_EINVAL;
+    }
+
+    ret = psbt_build_tx(psbt, &psbt->tx, &is_pset, false);
 
     if (ret != WALLY_OK)
         return ret;
@@ -4722,6 +5034,12 @@ int wally_psbt_get_input_bip32_key_from_alloc(const struct wally_psbt *psbt,
         /* We don't have a taproot signature, so try matching the taproot key */
         ret = wally_map_keypath_get_bip32_key_from_alloc(&inp->taproot_leaf_paths,
                                                          subindex, hdkey, output);
+        if (ret == WALLY_OK && !*output) {
+            /* A BIP376 silent payment input identifies its key by the spend
+             * key that the tweak applies to, not by a taproot keypath */
+            ret = wally_map_keypath_get_bip32_key_from_alloc(&inp->sp_spend_keypaths,
+                                                             subindex, hdkey, output);
+        }
     }
     return ret;
 }
@@ -5148,6 +5466,62 @@ done:
     return ret;
 }
 
+int wally_psbt_get_input_sp_spend_key(const struct wally_psbt *psbt, size_t index,
+                                      const struct ext_key *hdkey,
+                                      unsigned char *bytes_out, size_t len)
+{
+    unsigned char pubkey[EC_PUBLIC_KEY_LEN];
+    const struct wally_tx_output *utxo = NULL;
+    const struct wally_map_item *tweak;
+    struct wally_psbt_input *inp = psbt_get_input(psbt, index);
+    size_t script_type = WALLY_SCRIPT_TYPE_UNKNOWN, pubkey_idx;
+    int ret;
+
+    if (!inp || !hdkey || hdkey->priv_key[0] != BIP32_FLAG_KEY_PRIVATE ||
+        !bytes_out || len != EC_PRIVATE_KEY_LEN)
+        return WALLY_EINVAL;
+
+    tweak = wally_map_get_integer(&inp->psbt_fields, PSBT_IN_SP_TWEAK);
+    if (!tweak)
+        return WALLY_EINVAL; /* Not a silent payment input */
+
+    /* BIP376 has the Updater identify the spend key, so that a signer knows
+     * which of its keys the tweak belongs to */
+    ret = wally_map_find_bip32_public_key_from(&inp->sp_spend_keypaths, 0,
+                                               hdkey, &pubkey_idx);
+    if (ret != WALLY_OK || !pubkey_idx)
+        return WALLY_EINVAL; /* Spend key not found */
+
+    /* d = (b_spend + tweak) mod n */
+    ret = wally_ec_scalar_add(hdkey->priv_key + 1, EC_PRIVATE_KEY_LEN,
+                              tweak->value, tweak->value_len, bytes_out, len);
+    if (ret != WALLY_OK)
+        return ret;
+
+    /* BIP376 requires the signer to fail unless x(d.G) is the output key P,
+     * since the tweak comes from the Updater and may be wrong through error
+     * or malice. Note the BIP words this as negating d when d.G has an odd y
+     * coordinate: BIP340 signing negates internally, and comparing x
+     * coordinates ignores the parity, so there is nothing to negate here.
+     */
+    ret = wally_psbt_get_input_best_utxo(psbt, index, &utxo);
+    if (ret == WALLY_OK)
+        ret = wally_scriptpubkey_get_type(utxo->script, utxo->script_len,
+                                          &script_type);
+    if (ret == WALLY_OK)
+        ret = wally_ec_public_key_from_private_key(bytes_out, len,
+                                                   pubkey, sizeof(pubkey));
+    if (ret == WALLY_OK &&
+        (script_type != WALLY_SCRIPT_TYPE_P2TR ||
+         memcmp(utxo->script + 2, pubkey + 1, EC_XONLY_PUBLIC_KEY_LEN)))
+        ret = WALLY_EINVAL; /* The tweak does not give the outputs spend key */
+
+    wally_clear(pubkey, sizeof(pubkey));
+    if (ret != WALLY_OK)
+        wally_clear(bytes_out, len);
+    return ret;
+}
+
 int wally_psbt_sign_input_bip32(struct wally_psbt *psbt,
                                 size_t index, size_t subindex,
                                 const unsigned char *txhash, size_t txhash_len,
@@ -5160,43 +5534,60 @@ int wally_psbt_sign_input_bip32(struct wally_psbt *psbt,
     uint32_t sighash, sighash_type;
     struct wally_psbt_input *inp = psbt_get_input_signature_type(psbt, index, &sighash_type);
     const bool is_taproot = sighash_type == WALLY_SIGTYPE_SW_V1;
+    bool is_sp;
     int ret;
 
     if (!inp || !hdkey || hdkey->priv_key[0] != BIP32_FLAG_KEY_PRIVATE ||
         (flags & ~(EC_FLAG_GRIND_R|EC_FLAG_ELEMENTS)))
         return WALLY_EINVAL;
 
-    /* Find the public key this signature is for */
-    if (is_taproot)
-        ret = wally_map_find_bip32_public_key_from(&inp->taproot_leaf_hashes,
-                                                   subindex, hdkey,
-                                                   &pubkey_idx);
-    else
-        ret = wally_map_find_bip32_public_key_from(&inp->keypaths,
-                                                   subindex, hdkey,
-                                                   &pubkey_idx);
-    if (ret != WALLY_OK || !pubkey_idx)
-        return WALLY_EINVAL; /* Signing pubkey key not found */
+    /* A BIP376 silent payment input is identified by its tweak. Its signing
+     * key comes from the spend keypaths, since such an input has no taproot
+     * keypath to find a key through */
+    is_sp = !!wally_map_get_integer(&inp->psbt_fields, PSBT_IN_SP_TWEAK);
 
-    if (!is_taproot) {
-        /* ECDSA: Use untweaked private key. Only grinding flag is relevant */
-        memcpy(signing_key, hdkey->priv_key + 1, EC_PRIVATE_KEY_LEN);
-        flags = EC_FLAG_ECDSA | (flags & EC_FLAG_GRIND_R);
-    } else {
-        /* Schnorr BIP340: Tweak the private key */
-        const struct wally_map_item *p = wally_map_get_integer(&inp->psbt_fields,
-                                                               PSBT_IN_TAP_MERKLE_ROOT);
-        const unsigned char *merkle_root = p ? p->value : NULL;
-        const size_t merkle_root_len = p ? p->value_len : 0;
-
-        ret = wally_ec_private_key_bip341_tweak(hdkey->priv_key + 1, EC_PRIVATE_KEY_LEN,
-                                                merkle_root, merkle_root_len,
-                                                flags & EC_FLAG_ELEMENTS,
+    if (is_sp) {
+        if (!is_taproot)
+            return WALLY_EINVAL; /* Silent payment outputs are always p2tr */
+        ret = wally_psbt_get_input_sp_spend_key(psbt, index, hdkey,
                                                 signing_key, sizeof(signing_key));
         if (ret != WALLY_OK)
-            goto done;
-        /* Only Elements flag is relevant */
+            return ret;
+        /* Only the Elements flag is relevant */
         flags = EC_FLAG_SCHNORR | (flags & EC_FLAG_ELEMENTS);
+    } else {
+        /* Find the public key this signature is for */
+        if (is_taproot)
+            ret = wally_map_find_bip32_public_key_from(&inp->taproot_leaf_hashes,
+                                                       subindex, hdkey,
+                                                       &pubkey_idx);
+        else
+            ret = wally_map_find_bip32_public_key_from(&inp->keypaths,
+                                                       subindex, hdkey,
+                                                       &pubkey_idx);
+        if (ret != WALLY_OK || !pubkey_idx)
+            return WALLY_EINVAL; /* Signing pubkey key not found */
+
+        if (!is_taproot) {
+            /* ECDSA: Use untweaked private key. Only grinding flag is relevant */
+            memcpy(signing_key, hdkey->priv_key + 1, EC_PRIVATE_KEY_LEN);
+            flags = EC_FLAG_ECDSA | (flags & EC_FLAG_GRIND_R);
+        } else {
+            /* Schnorr BIP340: Tweak the private key */
+            const struct wally_map_item *p = wally_map_get_integer(&inp->psbt_fields,
+                                                                   PSBT_IN_TAP_MERKLE_ROOT);
+            const unsigned char *merkle_root = p ? p->value : NULL;
+            const size_t merkle_root_len = p ? p->value_len : 0;
+
+            ret = wally_ec_private_key_bip341_tweak(hdkey->priv_key + 1, EC_PRIVATE_KEY_LEN,
+                                                    merkle_root, merkle_root_len,
+                                                    flags & EC_FLAG_ELEMENTS,
+                                                    signing_key, sizeof(signing_key));
+            if (ret != WALLY_OK)
+                goto done;
+            /* Only Elements flag is relevant */
+            flags = EC_FLAG_SCHNORR | (flags & EC_FLAG_ELEMENTS);
+        }
     }
 
     sighash = inp->sighash;
@@ -6067,6 +6458,9 @@ done:
         wally_map_remove_integer(&input->psbt_fields, PSBT_IN_TAP_KEY_SIG);
         wally_map_remove_integer(&input->psbt_fields, PSBT_IN_TAP_INTERNAL_KEY);
         wally_map_remove_integer(&input->psbt_fields, PSBT_IN_TAP_MERKLE_ROOT);
+        /* BIP376 requires a finalizer to remove these once the witness exists */
+        wally_map_remove_integer(&input->psbt_fields, PSBT_IN_SP_TWEAK);
+        wally_map_clear(&input->sp_spend_keypaths);
         wally_map_clear(&input->keypaths);
         wally_map_clear(&input->signatures);
         wally_map_clear(&input->taproot_leaf_paths);
@@ -6720,10 +7114,14 @@ PSBT_FIELD(input, witness_script, PSBT_0)
 PSBT_FIELD(input, final_scriptsig, PSBT_0)
 PSBT_FIELD(input, taproot_signature, PSBT_0)
 PSBT_FIELD(input, taproot_internal_key, PSBT_0)
+PSBT_FIELD(input, sp_tweak, PSBT_2)
 PSBT_GET_S(input, final_witness, wally_tx_witness_stack, wally_tx_witness_stack_clone_alloc)
 PSBT_GET_M(input, keypath)
 PSBT_GET_M(input, signature)
 PSBT_GET_M(input, unknown)
+PSBT_GET_M(input, sp_ecdh_share)
+PSBT_GET_M(input, sp_dleq_proof)
+PSBT_GET_M(input, sp_spend_keypath)
 PSBT_GET_I(input, sighash, size_t, PSBT_0)
 
 int wally_psbt_get_input_previous_txid(const struct wally_psbt *psbt, size_t index,
@@ -6857,6 +7255,8 @@ int wally_psbt_clear_input_required_lockheight(struct wally_psbt *psbt, size_t i
     return wally_psbt_input_clear_required_lockheight(psbt_get_input(psbt, index));
 }
 PSBT_FIELD(output, taproot_internal_key, PSBT_0)
+PSBT_FIELD(output, sp_v0_info, PSBT_2)
+PSBT_FIELD(output, sp_v0_label, PSBT_2)
 
 #ifndef WALLY_ABI_NO_ELEMENTS
 #ifndef BUILD_ELEMENTS

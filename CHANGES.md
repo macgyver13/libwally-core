@@ -1,5 +1,30 @@
 # Changes
 
+## Version Unknown
+
+### Added
+- silentpayments: Add BIP-352 sending, BIP-375 PSBT support and BIP-376 spending:
+  - New `wally_silentpayments.h` API. Sending:
+    `wally_psbt_get_input_sp_eligible`, `wally_psbt_get_sp_smallest_outpoint`,
+    and `wally_psbt_sp_resolve` to derive the outputs and attach one global
+    ECDH share and DLEQ proof per recipient scan key
+  - Verification without private keys: `wally_psbt_get_sp_status` checks
+    shares, proofs and resolved output scripts
+  - Collaborative sending: `wally_psbt_sp_contribute` writes one input's share
+    and proof, and `wally_psbt_sp_resolve_shares` combines the per-input shares
+    into the outputs once every signer has contributed
+  - BIP-375 PSBT fields: `PSBT_OUT_SP_V0_INFO`, `PSBT_OUT_SP_V0_LABEL` and the
+    global/per-input ECDH share and DLEQ proof maps, with their accessors
+  - BIP-376 spend fields: `PSBT_IN_SP_TWEAK` and
+    `PSBT_IN_SP_SPEND_BIP32_DERIVATION`, signing of tweaked spend keys via
+    `wally_psbt_get_input_sp_spend_key`, and their removal on finalization
+  - BIP-352 addresses: `wally_sp_address_from_bytes`
+  - BIP-392 `sp()` output descriptors, and the `spscan`/`spspend` key
+    expressions (`wally_descriptor_sp_key_from_bytes`,
+    `wally_descriptor_sp_key_to_bytes`)
+  - Requires secp256k1-zkp with the silentpayments and dleq modules
+    (guarded by `BUILD_STANDARD_SECP`)
+
 ## Version 1.5.7
 
 ### Added
