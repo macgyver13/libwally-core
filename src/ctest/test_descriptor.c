@@ -3243,6 +3243,108 @@ done_psbt:
     return ok;
 }
 
+/* Scan private key/spend public key from the BIP-352 test vectors */
+#define SP_SCAN_KEY "spscan1qpa55up5q9zn30790dw2pr7dpx0wn2ef9su2vcgn9jje5mwgvrukqyhxfs4kklqm4x58pywtcm2kzqrpxpj6mtt5rzpk2hyzgfhxclnekj2vrpm"
+#define SP_SPEND_KEY "spspend1qpa55up5q9zn30790dw2pr7dpx0wn2ef9su2vcgn9jje5mwgvrukf6yaz5j546e96nf8nc8322026058jk8yw8a99kmra360s5xev84qm67sry"
+#define SP_ORIGIN "[d34db33f/352h/0h/0h]"
+
+static const char *g_sp_invalid_cases[] = {
+    "sp()",                                 /* Requires a key expression */
+    "sp(" SP_SCAN_KEY "," SP_SCAN_KEY ")",  /* Two argument form is unsupported */
+    "sh(sp(" SP_SCAN_KEY "))",              /* sp() is top level only */
+    "wsh(sp(" SP_SCAN_KEY "))",             /* sp() is top level only */
+    "wpkh(" SP_SCAN_KEY ")",                /* sp keys are only valid under sp() */
+    /* Bech32 rather than bech32m */
+    "sp(spscan1qpa55up5q9zn30790dw2pr7dpx0wn2ef9su2vcgn9jje5mwgvrukqyhxfs4kklqm4x58pywtcm2kzqrpxpj6mtt5rzpk2hyzgfhxclnek8ku0ye)",
+    /* Silent payments v1 */
+    "sp(spscan1ppa55up5q9zn30790dw2pr7dpx0wn2ef9su2vcgn9jje5mwgvrukqyhxfs4kklqm4x58pywtcm2kzqrpxpj6mtt5rzpk2hyzgfhxclnekssv8gg)",
+    /* Truncated payload */
+    "sp(spscan1qpa55up5q9zn30790dw2pr7dpx0wn2ef9su2vcgn9jje5mwgvrukqfam8z0)"
+};
+
+/* BIP-392 sp() descriptors, which cannot generate a script and so are not
+ * covered by the table driven cases above.
+ */
+static bool check_silent_payments(void)
+{
+    const char *valid[] = { "sp(" SP_SCAN_KEY ")", "sp(" SP_ORIGIN SP_SCAN_KEY ")",
+                            "sp(" SP_SPEND_KEY ")" };
+    const uint32_t expected = WALLY_MS_IS_DESCRIPTOR | WALLY_MS_IS_PRIVATE | WALLY_MS_IS_RAW;
+    unsigned char script[64], fingerprint[4];
+    struct wally_descriptor *descriptor;
+    char *checksum = NULL, *key = NULL, *path = NULL;
+    size_t i, written;
+    uint32_t features, num_keys;
+    bool ok = true;
+
+    for (i = 0; i < NUM_ELEMS(valid); ++i) {
+        if (!check_ret("descriptor_parse",
+                       wally_descriptor_parse(valid[i], NULL, WALLY_NETWORK_BITCOIN_MAINNET,
+                                              0, &descriptor), WALLY_OK))
+            return false;
+
+        ok &= check_ret("descriptor_get_features",
+                        wally_descriptor_get_features(descriptor, &features), WALLY_OK);
+        if ((features & expected) != expected) {
+            printf("descriptor_get_features: expected 0x%x in 0x%x\n", expected, features);
+            ok = false;
+        }
+        /* The key is returned as its original bech32m text */
+        ok &= check_ret("descriptor_get_num_keys",
+                        wally_descriptor_get_num_keys(descriptor, &num_keys), WALLY_OK);
+        ok &= check_ret("descriptor_get_num_keys count", (int)num_keys, 1);
+        ok &= check_ret("descriptor_get_key",
+                        wally_descriptor_get_key(descriptor, 0, &key), WALLY_OK);
+        if (key && !strstr(valid[i], key)) {
+            printf("descriptor_get_key: unexpected key [%s]\n", key);
+            ok = false;
+        }
+        wally_free_string(key);
+        key = NULL;
+        /* Checksums can be generated, which is the point of parsing these */
+        ok &= check_ret("descriptor_get_checksum",
+                        wally_descriptor_get_checksum(descriptor, 0, &checksum), WALLY_OK);
+        wally_free_string(checksum);
+        checksum = NULL;
+        /* But no script can be generated without the sender's input keys */
+        ok &= check_ret("descriptor_to_script",
+                        wally_descriptor_to_script(descriptor, 0, 0, 0, 0, 0, 0,
+                                                   script, sizeof(script), &written),
+                        WALLY_ERROR);
+        wally_descriptor_free(descriptor);
+    }
+
+    /* The key origin is readable */
+    if (!check_ret("descriptor_parse",
+                   wally_descriptor_parse("sp(" SP_ORIGIN SP_SCAN_KEY ")", NULL,
+                                          WALLY_NETWORK_BITCOIN_MAINNET, 0,
+                                          &descriptor), WALLY_OK))
+        return false;
+    ok &= check_ret("descriptor_get_key_origin_fingerprint",
+                    wally_descriptor_get_key_origin_fingerprint(descriptor, 0, fingerprint,
+                                                                sizeof(fingerprint)), WALLY_OK);
+    ok &= check_varbuff("descriptor_get_key_origin_fingerprint", fingerprint,
+                        sizeof(fingerprint), "d34db33f");
+    ok &= check_ret("descriptor_get_key_origin_path_str",
+                    wally_descriptor_get_key_origin_path_str(descriptor, 0, &path), WALLY_OK);
+    if (path && strcmp(path, "352h/0h/0h")) {
+        printf("descriptor_get_key_origin_path_str: got [%s]\n", path);
+        ok = false;
+    }
+    wally_free_string(path);
+    wally_descriptor_free(descriptor);
+
+    for (i = 0; i < NUM_ELEMS(g_sp_invalid_cases); ++i) {
+        if (wally_descriptor_parse(g_sp_invalid_cases[i], NULL, WALLY_NETWORK_BITCOIN_MAINNET,
+                                   0, &descriptor) == WALLY_OK) {
+            printf("descriptor_parse: expected failure for [%s]\n", g_sp_invalid_cases[i]);
+            wally_descriptor_free(descriptor);
+            ok = false;
+        }
+    }
+    return ok;
+}
+
 int main(void)
 {
     bool tests_ok = true;
@@ -3276,6 +3378,11 @@ int main(void)
 
     if (!test_psbt_taproot_scriptpath()) {
         printf("[test_psbt_taproot_scriptpath] failed!\n");
+        tests_ok = false;
+    }
+
+    if (!check_silent_payments()) {
+        printf("[silent payments] descriptor test failed!\n");
         tests_ok = false;
     }
 

@@ -101,6 +101,9 @@ struct wally_psbt_input {
     struct wally_map musig2_pubkeys;      /* BIP-373: agg pubkey -> participant pubkeys */
     struct wally_map musig2_pubnonces;    /* BIP-373: (participant||agg[||leaf]) -> pubnonce */
     struct wally_map musig2_partial_sigs; /* BIP-373: (participant||agg[||leaf]) -> partial_sig */
+    struct wally_map sp_ecdh_shares; /* BIP375 shares keyed by scan public key */
+    struct wally_map sp_dleq_proofs; /* BIP375 proofs keyed by scan public key */
+    struct wally_map sp_spend_keypaths; /* BIP376 spend key derivation paths */
 #ifndef WALLY_ABI_NO_ELEMENTS
     uint64_t issuance_amount; /* Issuance amount, or 0 if not given */
     uint64_t inflation_keys; /* Number of reissuance tokens, or 0 if none given */
@@ -153,6 +156,8 @@ struct wally_psbt {
     uint32_t fallback_locktime;
     uint32_t has_fallback_locktime;
     uint32_t tx_modifiable_flags;
+    struct wally_map global_sp_ecdh_shares; /* BIP375 shares keyed by scan public key */
+    struct wally_map global_sp_dleq_proofs; /* BIP375 proofs keyed by scan public key */
 #ifndef WALLY_ABI_NO_ELEMENTS
     struct wally_map global_scalars;
     uint32_t pset_modifiable_flags;
@@ -161,6 +166,110 @@ struct wally_psbt {
     struct wally_map *signing_cache;
 };
 #endif /* SWIG */
+
+/** Set or replace a BIP375 global ECDH share. */
+WALLY_CORE_API int wally_psbt_set_global_sp_ecdh_share(
+    struct wally_psbt *psbt,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    const unsigned char *share,
+    size_t share_len);
+
+/** Set or replace a BIP375 global DLEQ proof. */
+WALLY_CORE_API int wally_psbt_set_global_sp_dleq_proof(
+    struct wally_psbt *psbt,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    const unsigned char *proof,
+    size_t proof_len);
+
+/**
+ * Find a BIP375 global ECDH share by its scan public key.
+ *
+ * :param psbt: The PSBT to find the share in.
+ * :param scan_key: The recipient's compressed scan public key.
+ * :param scan_key_len: Length of ``scan_key`` in bytes. Must be `EC_PUBLIC_KEY_LEN`.
+ * :param written: Destination for the 1 based index of the share, or 0 if not found.
+ */
+WALLY_CORE_API int wally_psbt_find_global_sp_ecdh_share(
+    const struct wally_psbt *psbt,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    size_t *written);
+
+/**
+ * Find a BIP375 global DLEQ proof by its scan public key.
+ *
+ * :param psbt: The PSBT to find the proof in.
+ * :param scan_key: The recipient's compressed scan public key.
+ * :param scan_key_len: Length of ``scan_key`` in bytes. Must be `EC_PUBLIC_KEY_LEN`.
+ * :param written: Destination for the 1 based index of the proof, or 0 if not found.
+ */
+WALLY_CORE_API int wally_psbt_find_global_sp_dleq_proof(
+    const struct wally_psbt *psbt,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    size_t *written);
+
+/** Set or replace a BIP375 ECDH share on an input. */
+WALLY_CORE_API int wally_psbt_input_set_sp_ecdh_share(
+    struct wally_psbt_input *input,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    const unsigned char *share,
+    size_t share_len);
+
+/** Set or replace a BIP375 DLEQ proof on an input. */
+WALLY_CORE_API int wally_psbt_input_set_sp_dleq_proof(
+    struct wally_psbt_input *input,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    const unsigned char *proof,
+    size_t proof_len);
+
+/** Find a BIP375 ECDH share on an input, for `wally_psbt_find_input_sp_ecdh_share`. */
+WALLY_CORE_API int wally_psbt_input_find_sp_ecdh_share(
+    const struct wally_psbt_input *input,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    size_t *written);
+
+/** Find a BIP375 DLEQ proof on an input, for `wally_psbt_find_input_sp_dleq_proof`. */
+WALLY_CORE_API int wally_psbt_input_find_sp_dleq_proof(
+    const struct wally_psbt_input *input,
+    const unsigned char *scan_key,
+    size_t scan_key_len,
+    size_t *written);
+
+/** Find a BIP376 spend keypath on an input, for `wally_psbt_find_input_sp_spend_keypath`. */
+WALLY_CORE_API int wally_psbt_input_find_sp_spend_keypath(
+    const struct wally_psbt_input *input,
+    const unsigned char *spend_key,
+    size_t spend_key_len,
+    size_t *written);
+
+/**
+ * Add a BIP376 silent payment spend keypath to an input.
+ *
+ * :param input: The input to add to.
+ * :param pub_key: The 33-byte spend pubkey used to derive the key locking this input.
+ * :param pub_key_len: Length of ``pub_key`` in bytes. Must be `EC_PUBLIC_KEY_LEN`.
+ * :param fingerprint: The master key fingerprint for the spend pubkey.
+ * :param fingerprint_len: Length of ``fingerprint`` in bytes. Must be `BIP32_KEY_FINGERPRINT_LEN`.
+ * :param child_path: The BIP32 derivation path for the spend pubkey.
+ * :param child_path_len: The number of items in ``child_path``.
+ *
+ * .. note:: BIP376 allows an all-zero ``fingerprint`` with an empty
+ *|    ``child_path``, if the Updater does not wish to reveal them.
+ */
+WALLY_CORE_API int wally_psbt_input_sp_spend_keypath_add(
+    struct wally_psbt_input *input,
+    const unsigned char *pub_key,
+    size_t pub_key_len,
+    const unsigned char *fingerprint,
+    size_t fingerprint_len,
+    const uint32_t *child_path,
+    size_t child_path_len);
 
 /**
  * Set the previous txid in an input.
@@ -2539,6 +2648,30 @@ WALLY_CORE_API int wally_psbt_add_input_taproot_keypath(
     size_t child_path_len);
 
 /**
+ * Add a BIP376 silent payment spend keypath to a given PSBT input.
+ *
+ * :param psbt: The PSBT to add the keypath to. Must be a v2 PSBT.
+ * :param index: The zero-based index of the input to add to.
+ * :param pub_key: The 33-byte spend pubkey used to derive the key locking this input.
+ * :param pub_key_len: Length of ``pub_key`` in bytes. Must be `EC_PUBLIC_KEY_LEN`.
+ * :param fingerprint: The master key fingerprint for the spend pubkey.
+ * :param fingerprint_len: Length of ``fingerprint`` in bytes. Must be `BIP32_KEY_FINGERPRINT_LEN`.
+ * :param child_path: The BIP32 derivation path for the spend pubkey.
+ * :param child_path_len: The number of items in ``child_path``.
+ *
+ * .. note:: See `wally_psbt_input_sp_spend_keypath_add`.
+ */
+WALLY_CORE_API int wally_psbt_add_input_sp_spend_keypath(
+    struct wally_psbt *psbt,
+    uint32_t index,
+    const unsigned char *pub_key,
+    size_t pub_key_len,
+    const unsigned char *fingerprint,
+    size_t fingerprint_len,
+    const uint32_t *child_path,
+    size_t child_path_len);
+
+/**
  * Add a transaction input to a PSBT at a given position.
  *
  * :param psbt: The PSBT to add the input to.
@@ -2993,6 +3126,9 @@ WALLY_CORE_API int wally_psbt_sign_bip32(
  * :param hdkey: The derived extended key to sign with.
  * :param flags: Flags controlling signing. Must be 0 or `EC_FLAG_GRIND_R`,
  *|    logical or-d with `EC_FLAG_ELEMENTS` if ``psbt`` is a PSET.
+ *
+ * .. note:: An input with a `PSBT_IN_SP_TWEAK` field is signed as a BIP376
+ *|    silent payment spend; see `wally_psbt_get_input_sp_spend_key`.
  */
 WALLY_CORE_API int wally_psbt_sign_input_bip32(
     struct wally_psbt *psbt,
@@ -3002,6 +3138,32 @@ WALLY_CORE_API int wally_psbt_sign_input_bip32(
     size_t txhash_len,
     const struct ext_key *hdkey,
     uint32_t flags);
+
+/**
+ * Get the private key to sign a BIP376 silent payment input with.
+ *
+ * :param psbt: The PSBT containing the input to get the signing key for.
+ * :param index: The zero-based index of the input in the PSBT.
+ * :param hdkey: The derived extended key holding the silent payment spend key.
+ * :param bytes_out: Destination for the signing key.
+ * FIXED_SIZED_OUTPUT(len, bytes_out, EC_PRIVATE_KEY_LEN)
+ *
+ * The key returned is the input's spend key plus its silent payment tweak.
+ * The input must hold both a silent payment tweak and a spend keypath
+ * matching ``hdkey``, and its witness utxo must be the p2tr output that the
+ * tweaked key unlocks; anything else returns ``WALLY_EINVAL``.
+ *
+ * .. note:: Verifying the tweaked key against the output being spent is
+ *|    required by BIP376: the tweak is given by the Updater, and signing
+ *|    with an incorrect one produces a valid signature for a key the signer
+ *|    does not control.
+ */
+WALLY_CORE_API int wally_psbt_get_input_sp_spend_key(
+    const struct wally_psbt *psbt,
+    size_t index,
+    const struct ext_key *hdkey,
+    unsigned char *bytes_out,
+    size_t len);
 
 /**
  * Finalize a PSBT.
