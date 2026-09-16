@@ -1951,6 +1951,7 @@ int wally_psbt_set_tx_modifiable_flags(struct wally_psbt *psbt, uint32_t flags) 
         (flags & ~PSBT_TXMOD_ALL_FLAGS))
         return WALLY_EINVAL;
     psbt->tx_modifiable_flags = flags;
+    psbt->has_tx_modifiable_flags = 1u;
     return WALLY_OK;
 }
 
@@ -3328,6 +3329,7 @@ int wally_psbt_from_bytes(const unsigned char *bytes, size_t len,
     }
     /* Reset modifiable flags for loaded PSBTs */
     (*output)->tx_modifiable_flags = 0;
+    (*output)->has_tx_modifiable_flags = 0;
 #ifdef BUILD_ELEMENTS
     (*output)->pset_modifiable_flags = 0;
 #endif /* BUILD_ELEMENTS */
@@ -3403,6 +3405,7 @@ int wally_psbt_from_bytes(const unsigned char *bytes, size_t len,
                 break;
             case PSBT_GLOBAL_TX_MODIFIABLE:
                 (*output)->tx_modifiable_flags = pull_u8_subfield(cursor, max);
+                (*output)->has_tx_modifiable_flags = 1u;
                 if ((*output)->tx_modifiable_flags & ~PSBT_TXMOD_ALL_FLAGS)
                     ret = WALLY_EINVAL; /* Invalid flags */
                 break;
@@ -4177,7 +4180,7 @@ int wally_psbt_to_bytes(const struct wally_psbt *psbt, uint32_t flags,
         push_psbt_key(&cursor, &max, PSBT_GLOBAL_OUTPUT_COUNT, NULL, 0);
         push_varint_varbuff(&cursor, &max, psbt->num_outputs);
 
-        if (psbt->tx_modifiable_flags) {
+        if (psbt->has_tx_modifiable_flags) {
             push_psbt_key(&cursor, &max, PSBT_GLOBAL_TX_MODIFIABLE, NULL, 0);
             push_varint(&cursor, &max, sizeof(uint8_t));
             push_u8(&cursor, &max, psbt->tx_modifiable_flags & 0xff);
@@ -4613,6 +4616,7 @@ static int psbt_combine(struct wally_psbt *psbt, const struct wally_psbt *src,
 
     /* Take any extra flags from the source psbt that we don't have  */
     psbt->tx_modifiable_flags |= src->tx_modifiable_flags;
+    psbt->has_tx_modifiable_flags |= src->has_tx_modifiable_flags;
 
     for (i = 0; ret == WALLY_OK && i < psbt->num_inputs; ++i)
         ret = combine_input(&psbt->inputs[i], &src->inputs[i], is_pset, for_clone);
@@ -4988,6 +4992,7 @@ static int psbt_v2_to_v0(struct wally_psbt *psbt)
     psbt->fallback_locktime = 0;
     psbt->has_fallback_locktime = false;
     psbt->tx_modifiable_flags = 0;
+    psbt->has_tx_modifiable_flags = false;
     return WALLY_OK;
 }
 
@@ -7341,6 +7346,7 @@ int wally_psbt_add_input_signature(struct wally_psbt *psbt, size_t index,
             psbt->tx_modifiable_flags &= ~WALLY_PSBT_TXMOD_OUTPUTS;
         if ((sighash & WALLY_SIGHASH_MASK) == WALLY_SIGHASH_SINGLE)
             psbt->tx_modifiable_flags |= WALLY_PSBT_TXMOD_SINGLE;
+        psbt->has_tx_modifiable_flags = 1u;
     }
     return ret;
 }
