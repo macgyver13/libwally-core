@@ -683,8 +683,8 @@ export function psbt_signing_cache_enable(psbt: Ref_wally_psbt, flags: number): 
 export function psbt_sp_contribute(psbt: Ref_wally_psbt, indices: Uint32Array|number[], priv_keys: Buffer|Uint8Array|null, entropy: Buffer|Uint8Array|null, flags: number): void;
 export function psbt_sp_musig_contribute(psbt: Ref_wally_psbt, musig_inputs: Ref_wally_sp_musig_input, num_musig_inputs: number, priv_keys: Buffer|Uint8Array|null, entropy: Buffer|Uint8Array|null, flags: number): void;
 export function psbt_sp_musig_resolve_shares(psbt: Ref_wally_psbt, musig_inputs: Ref_wally_sp_musig_input, num_musig_inputs: number, flags: number): void;
-export function psbt_sp_musig_round1(psbt: Ref_wally_psbt, musig_inputs: Ref_wally_sp_musig_input, num_musig_inputs: number, priv_keys: Buffer|Uint8Array|null, entropy: Buffer|Uint8Array|null, flags: number): [secnonces_out: Ref_wally_musig_secnonce, session_digest_out: Buffer, status_out: number];
-export function psbt_sp_musig_round2(psbt: Ref_wally_psbt, musig_inputs: Ref_wally_sp_musig_input, num_musig_inputs: number, priv_keys: Buffer|Uint8Array|null, session_digest: Buffer|Uint8Array|null, flags: number): Ref_wally_musig_secnonce;
+export function psbt_sp_musig_round1(psbt: Ref_wally_psbt, musig_inputs: Ref_wally_sp_musig_input, num_musig_inputs: number, signer_indices: Uint32Array|number[], priv_keys: Buffer|Uint8Array|null, entropy: Buffer|Uint8Array|null, flags: number): [secnonces_out: Ref_wally_musig_secnonce, session_digest_out: Buffer, status_out: number];
+export function psbt_sp_musig_round2(psbt: Ref_wally_psbt, musig_inputs: Ref_wally_sp_musig_input, num_musig_inputs: number, signer_indices: Uint32Array|number[], priv_keys: Buffer|Uint8Array|null, session_digest: Buffer|Uint8Array|null, flags: number): Ref_wally_musig_secnonce;
 export function psbt_sp_resolve(psbt: Ref_wally_psbt, priv_keys: Buffer|Uint8Array|null, entropy: Buffer|Uint8Array|null, flags: number): void;
 export function psbt_sp_resolve_shares(psbt: Ref_wally_psbt, flags: number): void;
 export function psbt_to_base64(psbt: Ref_wally_psbt, flags: number): string;

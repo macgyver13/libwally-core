@@ -264,11 +264,18 @@ WALLY_CORE_API int wally_psbt_get_sp_musig_session_digest(
 
 /** Contribute aggregate silent-payment shares and MuSig2 public nonces.
  *
+ * ``musig_inputs`` describes every aggregate input of the PSBT, and
+ * ``signer_indices`` lists, in ascending order, the positions within it that
+ * this party holds a participant key for. ``priv_keys``, the session random
+ * values and ``secnonces_out`` have one element per signer index, in the same
+ * order. A party holding none of the aggregate inputs passes no signer
+ * indices, keys or secret nonces: it then only checks and resolves the shares.
+ *
  * ``entropy`` must contain 32 bytes used as the DLEQ-proof entropy seed,
  * followed by one independent 32-byte MuSig2 session random value per
- * aggregate input. Each session random value must be uniformly random, unique
+ * signer index. Each session random value must be uniformly random, unique
  * and never reused. On success ``secnonces_out`` receives one owned secret
- * nonce per input and ``status_out`` is `WALLY_SP_INCOMPLETE` or
+ * nonce per signer index and ``status_out`` is `WALLY_SP_INCOMPLETE` or
  * `WALLY_SP_COMPLETE`. A complete result also resolves all silent-payment
  * scripts and clears the PSBT input/output modifiable flags.
  *
@@ -280,6 +287,8 @@ WALLY_CORE_API int wally_psbt_sp_musig_round1(
     struct wally_psbt *psbt,
     const struct wally_sp_musig_input *musig_inputs,
     size_t num_musig_inputs,
+    const uint32_t *signer_indices,
+    size_t num_signer_indices,
     const unsigned char *priv_keys,
     size_t priv_keys_len,
     const unsigned char *entropy,
@@ -294,7 +303,10 @@ WALLY_CORE_API int wally_psbt_sp_musig_round1(
  *
  * The supplied digest must match the PSBT, every share and proof must be
  * present and valid, every resolved output must re-derive identically, and the
- * transaction's global tx-modifiable flags must all be zero. Signing consumes
+ * transaction's global tx-modifiable flags must all be zero. As for
+ * `wally_psbt_sp_musig_round1`, ``musig_inputs`` describes every aggregate
+ * input while ``signer_indices``, ``priv_keys`` and ``secnonces`` cover only
+ * the inputs this party signs; at least one is required. Signing consumes
  * the secret nonces. If any signing operation fails, callers must discard
  * every nonce in the session even though the PSBT itself remains unchanged.
  */
@@ -302,6 +314,8 @@ WALLY_CORE_API int wally_psbt_sp_musig_round2(
     struct wally_psbt *psbt,
     const struct wally_sp_musig_input *musig_inputs,
     size_t num_musig_inputs,
+    const uint32_t *signer_indices,
+    size_t num_signer_indices,
     const unsigned char *priv_keys,
     size_t priv_keys_len,
     struct wally_musig_secnonce **secnonces,
