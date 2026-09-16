@@ -1993,9 +1993,9 @@ int wally_psbt_sp_musig_round1(
             ret = WALLY_EINVAL;
     }
     else if (ret == WALLY_OK && status == WALLY_SP_INCOMPLETE) {
-        size_t resolved = WALLY_SP_INVALID;
-        int resolve_ret = sp_status(staged, musig_inputs, num_musig_inputs,
-                                    true, &resolved);
+        /* Resolving can fail part way, after storing some scripts */
+        int resolve_ret = sp_resolve_shares(staged, musig_inputs,
+                                            num_musig_inputs);
         if (resolve_ret == WALLY_OK) {
             status = WALLY_SP_COMPLETE;
             staged->tx_modifiable_flags &= ~(WALLY_PSBT_TXMOD_INPUTS |
