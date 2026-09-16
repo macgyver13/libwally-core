@@ -26,7 +26,9 @@
     `wally_psbt_sp_musig_contribute`, `wally_psbt_sp_musig_resolve_shares`,
     `wally_psbt_get_sp_musig_status`, `wally_psbt_get_sp_musig_session_digest`,
     `wally_psbt_sp_musig_round1` and `wally_psbt_sp_musig_round2`, with the
-    per-input BIP-375 partial share and proof fields they exchange
+    per-input BIP-375 partial share and proof fields they exchange. The rounds
+    describe every aggregate input and name the ones the caller signs, so a
+    party can take part alongside inputs it holds no key for
   - MuSig2 signing of silent payment inputs under an aggregate key:
     `wally_psbt_musig2_agg_then_derive_add_nonce`,
     `wally_psbt_musig2_agg_then_derive_sign` and

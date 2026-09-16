@@ -1153,9 +1153,14 @@ cleanup:
     return ret;
 }
 
+/* Contribute for the signers' inputs: musig_inputs[signer_indices[i]] if
+ * signer_indices is given, otherwise musig_inputs[i]. priv_keys holds one key
+ * per signer, in the same order.
+ */
 static int sp_musig_contribute(struct wally_psbt *psbt,
                                const struct wally_sp_musig_input *musig_inputs,
-                               size_t num_musig_inputs,
+                               const uint32_t *signer_indices,
+                               size_t num_signers,
                                const unsigned char *priv_keys,
                                const unsigned char *entropy)
 {
@@ -1174,8 +1179,9 @@ static int sp_musig_contribute(struct wally_psbt *psbt,
     if (!recipients)
         return ret == WALLY_OK ? WALLY_EINVAL : ret; /* Nothing to contribute to */
 
-    for (i = 0; i < num_musig_inputs; ++i) {
-        const struct wally_sp_musig_input *musig = &musig_inputs[i];
+    for (i = 0; i < num_signers; ++i) {
+        const struct wally_sp_musig_input *musig =
+            &musig_inputs[signer_indices ? signer_indices[i] : i];
         const size_t num_keys = musig->pub_keys_len / EC_PUBLIC_KEY_LEN;
         const unsigned char *priv_key = priv_keys + i * EC_PRIVATE_KEY_LEN;
         struct wally_psbt_input *input = &psbt->inputs[musig->index];
@@ -1375,7 +1381,7 @@ int wally_psbt_sp_musig_contribute(struct wally_psbt *psbt,
     ret = wally_psbt_clone_alloc(psbt, 0, &staged);
     if (ret != WALLY_OK)
         return ret;
-    ret = sp_musig_contribute(staged, musig_inputs, num_musig_inputs,
+    ret = sp_musig_contribute(staged, musig_inputs, NULL, num_musig_inputs,
                               priv_keys, entropy);
     if (ret == WALLY_OK) {
         old = *psbt;
@@ -1911,9 +1917,27 @@ int wally_psbt_sp_musig_resolve_shares(struct wally_psbt *psbt,
     return sp_resolve_shares(psbt, musig_inputs, num_musig_inputs);
 }
 
+/* Check that signer_indices name distinct aggregate inputs, in order */
+static int sp_musig_signers_verify(size_t num_musig_inputs,
+                                   const uint32_t *signer_indices,
+                                   size_t num_signer_indices)
+{
+    size_t i;
+
+    if (!signer_indices != !num_signer_indices ||
+        num_signer_indices > num_musig_inputs)
+        return WALLY_EINVAL;
+    for (i = 0; i < num_signer_indices; ++i)
+        if (signer_indices[i] >= num_musig_inputs ||
+            (i && signer_indices[i] <= signer_indices[i - 1]))
+            return WALLY_EINVAL;
+    return WALLY_OK;
+}
+
 int wally_psbt_sp_musig_round1(
     struct wally_psbt *psbt,
     const struct wally_sp_musig_input *musig_inputs, size_t num_musig_inputs,
+    const uint32_t *signer_indices, size_t num_signer_indices,
     const unsigned char *priv_keys, size_t priv_keys_len,
     const unsigned char *entropy, size_t entropy_len, uint32_t flags,
     struct wally_musig_secnonce **secnonces_out,
@@ -1933,13 +1957,18 @@ int wally_psbt_sp_musig_round1(
         *status_out = WALLY_SP_INVALID;
     if (!psbt || !psbt->num_inputs || !musig_inputs || !num_musig_inputs ||
         num_musig_inputs > (SIZE_MAX - SHA256_LEN) / SHA256_LEN ||
-        !priv_keys || priv_keys_len != num_musig_inputs * EC_PRIVATE_KEY_LEN ||
+        !priv_keys != !num_signer_indices ||
+        priv_keys_len != num_signer_indices * EC_PRIVATE_KEY_LEN ||
         !entropy ||
-        entropy_len != SHA256_LEN + num_musig_inputs * SHA256_LEN ||
-        !secnonces_out || !session_digest_out || digest_len != SHA256_LEN ||
+        entropy_len != SHA256_LEN + num_signer_indices * SHA256_LEN ||
+        (num_signer_indices && !secnonces_out) ||
+        !session_digest_out || digest_len != SHA256_LEN ||
         !status_out || flags)
         return WALLY_EINVAL;
     ret = sp_musig_inputs_verify(psbt, musig_inputs, num_musig_inputs);
+    if (ret == WALLY_OK)
+        ret = sp_musig_signers_verify(num_musig_inputs, signer_indices,
+                                      num_signer_indices);
     if (ret != WALLY_OK || (ret = sp_sighash_policy(psbt)) != WALLY_OK)
         return ret;
     if (psbt->tx_modifiable_flags & ~(WALLY_PSBT_TXMOD_INPUTS |
@@ -1947,11 +1976,13 @@ int wally_psbt_sp_musig_round1(
         return WALLY_EINVAL;
 
     /* Front-load every validation that can fail before producing any nonce. */
-    for (i = 0; i < num_musig_inputs; ++i) {
+    for (i = 0; i < num_musig_inputs; ++i)
+        if (!sp_musig_input_matches(ctx, psbt, &musig_inputs[i], NULL))
+            return WALLY_EINVAL;
+    for (i = 0; i < num_signer_indices; ++i) {
         const unsigned char *secrand = entropy + SHA256_LEN * (i + 1);
         if (mem_is_zero(secrand, SHA256_LEN) ||
-            !sp_musig_input_matches(ctx, psbt, &musig_inputs[i], NULL) ||
-            sp_musig_signer_keys(psbt, &musig_inputs[i],
+            sp_musig_signer_keys(psbt, &musig_inputs[signer_indices[i]],
                                  priv_keys + i * EC_PRIVATE_KEY_LEN,
                                  participant, aggregate) != WALLY_OK)
             return WALLY_EINVAL;
@@ -1959,17 +1990,19 @@ int wally_psbt_sp_musig_round1(
     if ((ret = wally_psbt_get_sp_musig_session_digest(psbt, digest,
                                                        sizeof(digest))) != WALLY_OK)
         return ret;
-    secnonces = wally_calloc(num_musig_inputs * sizeof(*secnonces));
-    if (!secnonces)
-        return WALLY_ENOMEM;
+    if (num_signer_indices) {
+        secnonces = wally_calloc(num_signer_indices * sizeof(*secnonces));
+        if (!secnonces)
+            return WALLY_ENOMEM;
+    }
     ret = wally_psbt_clone_alloc(psbt, 0, &staged);
     if (ret != WALLY_OK)
         goto cleanup;
 
-    ret = sp_musig_contribute(staged, musig_inputs, num_musig_inputs,
-                              priv_keys, entropy);
-    for (i = 0; ret == WALLY_OK && i < num_musig_inputs; ++i) {
-        const struct wally_sp_musig_input *musig = &musig_inputs[i];
+    ret = sp_musig_contribute(staged, musig_inputs, signer_indices,
+                              num_signer_indices, priv_keys, entropy);
+    for (i = 0; ret == WALLY_OK && i < num_signer_indices; ++i) {
+        const struct wally_sp_musig_input *musig = &musig_inputs[signer_indices[i]];
         ret = sp_musig_signer_keys(staged, musig,
                                    priv_keys + i * EC_PRIVATE_KEY_LEN,
                                    participant, aggregate);
@@ -2007,7 +2040,7 @@ int wally_psbt_sp_musig_round1(
         old = *psbt;
         *psbt = *staged;
         *staged = old;
-        for (i = 0; i < num_musig_inputs; ++i) {
+        for (i = 0; i < num_signer_indices; ++i) {
             secnonces_out[i] = secnonces[i];
             secnonces[i] = NULL;
         }
@@ -2016,7 +2049,7 @@ int wally_psbt_sp_musig_round1(
     }
 
 cleanup:
-    for (i = 0; secnonces && i < num_musig_inputs; ++i)
+    for (i = 0; secnonces && i < num_signer_indices; ++i)
         wally_musig_secnonce_free(secnonces[i]);
     wally_free(secnonces);
     wally_psbt_free(staged);
@@ -2028,6 +2061,7 @@ cleanup:
 int wally_psbt_sp_musig_round2(
     struct wally_psbt *psbt,
     const struct wally_sp_musig_input *musig_inputs, size_t num_musig_inputs,
+    const uint32_t *signer_indices, size_t num_signer_indices,
     const unsigned char *priv_keys, size_t priv_keys_len,
     struct wally_musig_secnonce **secnonces,
     const unsigned char *session_digest, size_t digest_len, uint32_t flags)
@@ -2041,11 +2075,15 @@ int wally_psbt_sp_musig_round2(
     int ret;
 
     if (!psbt || !psbt->num_inputs || !musig_inputs || !num_musig_inputs ||
-        num_musig_inputs > SIZE_MAX / EC_PRIVATE_KEY_LEN ||
-        !priv_keys || priv_keys_len != num_musig_inputs * EC_PRIVATE_KEY_LEN ||
+        !num_signer_indices ||
+        num_signer_indices > SIZE_MAX / EC_PRIVATE_KEY_LEN ||
+        !priv_keys || priv_keys_len != num_signer_indices * EC_PRIVATE_KEY_LEN ||
         !secnonces || !session_digest || digest_len != SHA256_LEN || flags)
         return WALLY_EINVAL;
     ret = sp_musig_inputs_verify(psbt, musig_inputs, num_musig_inputs);
+    if (ret == WALLY_OK)
+        ret = sp_musig_signers_verify(num_musig_inputs, signer_indices,
+                                      num_signer_indices);
     if (ret != WALLY_OK || (ret = sp_sighash_policy(psbt)) != WALLY_OK ||
         psbt->tx_modifiable_flags)
         return ret == WALLY_OK ? WALLY_EINVAL : ret;
@@ -2057,10 +2095,11 @@ int wally_psbt_sp_musig_round2(
         return WALLY_EINVAL;
 
     /* Validate the full signing set before consuming the first secret nonce. */
-    for (i = 0; i < num_musig_inputs; ++i) {
+    for (i = 0; i < num_signer_indices; ++i) {
+        const struct wally_sp_musig_input *musig = &musig_inputs[signer_indices[i]];
         if (!secnonces[i] ||
-            !sp_musig_input_matches(ctx, psbt, &musig_inputs[i], NULL) ||
-            sp_musig_signer_keys(psbt, &musig_inputs[i],
+            !sp_musig_input_matches(ctx, psbt, musig, NULL) ||
+            sp_musig_signer_keys(psbt, musig,
                                  priv_keys + i * EC_PRIVATE_KEY_LEN,
                                  participant, aggregate) != WALLY_OK)
             return WALLY_EINVAL;
@@ -2068,8 +2107,8 @@ int wally_psbt_sp_musig_round2(
     ret = wally_psbt_clone_alloc(psbt, 0, &staged);
     if (ret != WALLY_OK)
         return ret;
-    for (i = 0; ret == WALLY_OK && i < num_musig_inputs; ++i) {
-        const struct wally_sp_musig_input *musig = &musig_inputs[i];
+    for (i = 0; ret == WALLY_OK && i < num_signer_indices; ++i) {
+        const struct wally_sp_musig_input *musig = &musig_inputs[signer_indices[i]];
         ret = sp_musig_signer_keys(staged, musig,
                                    priv_keys + i * EC_PRIVATE_KEY_LEN,
                                    participant, aggregate);
