@@ -210,6 +210,45 @@ class MusigSilentPaymentRoundsTests(unittest.TestCase):
                              modifiable_flags)
         wally_psbt_free(psbt)
 
+    def test_round1_failed_resolve_leaves_no_scripts(self):
+        psbt = self.build_psbt()
+        musig = self.musig_input()
+        scan_a = bytes.fromhex(sp.RECIPIENT['scan_pub_key'])
+
+        def round1(i):
+            key, key_len = make_cbuffer(self.secret_keys[i])
+            entropy = bytes([0x60 + i]) * 32 + bytes([0x70 + i]) * 32
+            nonce_out = (c_void_p * 1)()
+            digest_out, _ = make_cbuffer('00' * SHA256_LEN)
+            ret, status = wally_psbt_sp_musig_round1(
+                psbt, byref(musig), 1, key, key_len, entropy, len(entropy), 0,
+                nonce_out, digest_out, SHA256_LEN)
+            self.assertEqual(ret, WALLY_OK)
+            wally_musig_secnonce_free(nonce_out[0])
+            return status
+
+        self.assertEqual(round1(0), WALLY_SP_INCOMPLETE)
+        self.assertEqual(round1(1), WALLY_SP_INCOMPLETE)
+
+        # A second recipient, sorting after the first, arrives late: the last
+        # participant's shares cover the first scan key but not this one
+        scan_b = next(key for key in (sp.pubkey_of('%02x' % i * 32)
+                                      for i in range(1, 64)) if key > scan_a)
+        tx_out = pointer(wally_tx_output())
+        self.assertEqual(wally_tx_output_init_alloc(1000, None, 0, tx_out),
+                         WALLY_OK)
+        self.assertEqual(wally_psbt_add_tx_output_at(psbt, 1, 0, tx_out), WALLY_OK)
+        self.assertEqual(wally_psbt_set_output_amount(psbt, 1, 1000), WALLY_OK)
+        info = scan_b + bytes.fromhex(sp.RECIPIENT['spend_pub_key'])
+        self.assertEqual(wally_psbt_set_output_sp_v0_info(
+            psbt, 1, info, len(info)), WALLY_OK)
+
+        self.assertEqual(round1(2), WALLY_SP_INCOMPLETE)
+        # Resolving failed on the second scan key, so no script may be kept
+        self.assertEqual(psbt.contents.outputs[0].script_len, 0)
+        self.assertEqual(psbt.contents.outputs[1].script_len, 0)
+        wally_psbt_free(psbt)
+
     def test_agg_then_derive_rejects_bad_path_binding(self):
         psbt = self.build_psbt()
         secret, secret_len = make_cbuffer(self.secret_keys[0])
