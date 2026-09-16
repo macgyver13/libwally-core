@@ -2237,15 +2237,15 @@ inline int psbt_sp_musig_resolve_shares(const PSBT& psbt, const MUSIG_INPUTS& mu
     return detail::check_ret(__FUNCTION__, ret);
 }
 
-template <class PSBT, class MUSIG_INPUTS, class PRIV_KEYS, class ENTROPY, class SESSION_DIGEST_OUT>
-inline int psbt_sp_musig_round1(const PSBT& psbt, const MUSIG_INPUTS& musig_inputs, size_t num_musig_inputs, const PRIV_KEYS& priv_keys, const ENTROPY& entropy, uint32_t flags, struct wally_musig_secnonce** secnonces_out, SESSION_DIGEST_OUT& session_digest_out, size_t* status_out) {
-    int ret = ::wally_psbt_sp_musig_round1(detail::get_p(psbt), detail::get_p(musig_inputs), num_musig_inputs, priv_keys.data(), priv_keys.size(), entropy.data(), entropy.size(), flags, secnonces_out, session_digest_out.data(), session_digest_out.size(), status_out);
+template <class PSBT, class MUSIG_INPUTS, class SIGNER_INDICES, class PRIV_KEYS, class ENTROPY, class SESSION_DIGEST_OUT>
+inline int psbt_sp_musig_round1(const PSBT& psbt, const MUSIG_INPUTS& musig_inputs, size_t num_musig_inputs, const SIGNER_INDICES& signer_indices, const PRIV_KEYS& priv_keys, const ENTROPY& entropy, uint32_t flags, struct wally_musig_secnonce** secnonces_out, SESSION_DIGEST_OUT& session_digest_out, size_t* status_out) {
+    int ret = ::wally_psbt_sp_musig_round1(detail::get_p(psbt), detail::get_p(musig_inputs), num_musig_inputs, signer_indices.data(), signer_indices.size(), priv_keys.data(), priv_keys.size(), entropy.data(), entropy.size(), flags, secnonces_out, session_digest_out.data(), session_digest_out.size(), status_out);
     return detail::check_ret(__FUNCTION__, ret);
 }
 
-template <class PSBT, class MUSIG_INPUTS, class PRIV_KEYS, class SESSION_DIGEST>
-inline int psbt_sp_musig_round2(const PSBT& psbt, const MUSIG_INPUTS& musig_inputs, size_t num_musig_inputs, const PRIV_KEYS& priv_keys, struct wally_musig_secnonce** secnonces, const SESSION_DIGEST& session_digest, uint32_t flags) {
-    int ret = ::wally_psbt_sp_musig_round2(detail::get_p(psbt), detail::get_p(musig_inputs), num_musig_inputs, priv_keys.data(), priv_keys.size(), secnonces, session_digest.data(), session_digest.size(), flags);
+template <class PSBT, class MUSIG_INPUTS, class SIGNER_INDICES, class PRIV_KEYS, class SESSION_DIGEST>
+inline int psbt_sp_musig_round2(const PSBT& psbt, const MUSIG_INPUTS& musig_inputs, size_t num_musig_inputs, const SIGNER_INDICES& signer_indices, const PRIV_KEYS& priv_keys, struct wally_musig_secnonce** secnonces, const SESSION_DIGEST& session_digest, uint32_t flags) {
+    int ret = ::wally_psbt_sp_musig_round2(detail::get_p(psbt), detail::get_p(musig_inputs), num_musig_inputs, signer_indices.data(), signer_indices.size(), priv_keys.data(), priv_keys.size(), secnonces, session_digest.data(), session_digest.size(), flags);
     return detail::check_ret(__FUNCTION__, ret);
 }
 
