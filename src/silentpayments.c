@@ -1627,12 +1627,15 @@ int wally_psbt_sp_resolve(struct wally_psbt *psbt,
  * and the caller is responsible for the PSBT being a throwaway clone, since a
  * failure part way through leaves some scripts stored.
  *
+ * When checking, 'covered_out' if given reports whether every recipient's
+ * shares cover the eligible inputs, ie. whether resolving can succeed.
+ *
  * NOTE: the arguments are validated by the callers.
  */
 static int sp_status(struct wally_psbt *psbt,
                      const struct wally_sp_musig_input *musig_inputs,
                      size_t num_musig_inputs,
-                     bool resolve, size_t *written)
+                     bool resolve, size_t *written, bool *covered_out)
 {
     const secp256k1_context *ctx = wally_get_secp_context();
     struct sp_recipient *recipients = NULL;
@@ -1647,6 +1650,8 @@ static int sp_status(struct wally_psbt *psbt,
     int ret;
 
     *written = WALLY_SP_INVALID;
+    if (covered_out)
+        *covered_out = false;
 
     if (psbt->version != WALLY_PSBT_VERSION_2 ||
         wally_psbt_is_elements(psbt, &is_elements) != WALLY_OK || is_elements)
@@ -1819,6 +1824,8 @@ static int sp_status(struct wally_psbt *psbt,
     /* Incomplete coverage contradicts a resolved output, but is simply work
      * still to do while the outputs are unresolved.
      */
+    if (covered_out)
+        *covered_out = all_covered;
     if (all_covered)
         *written = all_resolved ? WALLY_SP_COMPLETE : WALLY_SP_INCOMPLETE;
     else if (!all_resolved)
@@ -1848,7 +1855,7 @@ int wally_psbt_get_sp_status(const struct wally_psbt *psbt, uint32_t flags,
     if (!psbt || !psbt->num_inputs || !written || flags)
         return WALLY_EINVAL;
     /* Checking stores nothing, so the cast away from const is not observable */
-    return sp_status((struct wally_psbt *)psbt, NULL, 0, false, written);
+    return sp_status((struct wally_psbt *)psbt, NULL, 0, false, written, NULL);
 }
 
 /* Resolve into a clone, and adopt it only if that succeeds, so that a failed
@@ -1867,7 +1874,7 @@ static int sp_resolve_shares(struct wally_psbt *psbt,
     ret = wally_psbt_clone_alloc(psbt, 0, &staged);
     if (ret != WALLY_OK)
         return ret;
-    ret = sp_status(staged, musig_inputs, num_musig_inputs, true, &status);
+    ret = sp_status(staged, musig_inputs, num_musig_inputs, true, &status, NULL);
     if (ret == WALLY_OK) {
         old = *psbt;
         *psbt = *staged;
@@ -1900,7 +1907,7 @@ int wally_psbt_get_sp_musig_status(const struct wally_psbt *psbt,
         return ret;
     /* Checking stores nothing, so the cast away from const is not observable */
     return sp_status((struct wally_psbt *)psbt, musig_inputs, num_musig_inputs,
-                     false, written);
+                     false, written, NULL);
 }
 
 int wally_psbt_sp_musig_resolve_shares(struct wally_psbt *psbt,
@@ -1951,6 +1958,7 @@ int wally_psbt_sp_musig_round1(
     unsigned char participant[EC_PUBLIC_KEY_LEN], aggregate[EC_PUBLIC_KEY_LEN];
     unsigned char digest[SHA256_LEN];
     size_t i, status = WALLY_SP_INVALID;
+    bool covered = false;
     int ret;
 
     if (status_out)
@@ -2015,7 +2023,8 @@ int wally_psbt_sp_musig_round1(
                 &secnonces[i]);
     }
     if (ret == WALLY_OK)
-        ret = sp_status(staged, musig_inputs, num_musig_inputs, false, &status);
+        ret = sp_status(staged, musig_inputs, num_musig_inputs, false, &status,
+                        &covered);
     if (ret == WALLY_OK && status == WALLY_SP_INVALID)
         ret = WALLY_EINVAL;
     if (ret == WALLY_OK && status == WALLY_SP_COMPLETE) {
@@ -2025,16 +2034,14 @@ int wally_psbt_sp_musig_round1(
         if (staged->tx_modifiable_flags)
             ret = WALLY_EINVAL;
     }
-    else if (ret == WALLY_OK && status == WALLY_SP_INCOMPLETE) {
-        /* Resolving can fail part way, after storing some scripts */
-        int resolve_ret = sp_resolve_shares(staged, musig_inputs,
-                                            num_musig_inputs);
-        if (resolve_ret == WALLY_OK) {
+    else if (ret == WALLY_OK && status == WALLY_SP_INCOMPLETE && covered) {
+        /* Only resolve once every share is present: short of that, resolving
+         * fails part way after storing some scripts. staged is already a
+         * throwaway, so a failure here needs no further clone to undo. */
+        ret = sp_status(staged, musig_inputs, num_musig_inputs, true, &status,
+                        NULL);
+        if (ret == WALLY_OK)
             status = WALLY_SP_COMPLETE;
-            staged->tx_modifiable_flags &= ~(WALLY_PSBT_TXMOD_INPUTS |
-                                              WALLY_PSBT_TXMOD_OUTPUTS);
-        } else if (resolve_ret != WALLY_EINVAL)
-            ret = resolve_ret;
     }
     if (ret == WALLY_OK) {
         old = *psbt;
@@ -2090,7 +2097,7 @@ int wally_psbt_sp_musig_round2(
     ret = wally_psbt_get_sp_musig_session_digest(psbt, digest, sizeof(digest));
     if (ret != WALLY_OK || memcmp(digest, session_digest, sizeof(digest)))
         return WALLY_EINVAL;
-    ret = sp_status(psbt, musig_inputs, num_musig_inputs, false, &status);
+    ret = sp_status(psbt, musig_inputs, num_musig_inputs, false, &status, NULL);
     if (ret != WALLY_OK || status != WALLY_SP_COMPLETE)
         return WALLY_EINVAL;
 
