@@ -128,7 +128,7 @@ static int path_from_str_n(const char *str, size_t str_len,
 
     while (i < str_len) {
         size_t multi;
-        bool is_wildcard = false, is_multi = false;
+        bool is_multi = false;
         start = i;
         v = 0;
         if (str[i] == '<' && (flags & BIP32_FLAG_STR_MULTIPATH)) {
@@ -176,7 +176,7 @@ static int path_from_str_n(const char *str, size_t str_len,
                     goto fail; /* Trailing slash, invalid */
                 continue;
             }
-            if (!(is_wildcard = str[i] == '*'))
+            if (str[i] != '*')
                 goto fail; /* Unknown character */
 
             /* Wildcard */
@@ -219,8 +219,8 @@ static int path_from_str_n(const char *str, size_t str_len,
             flags &= ~BIP32_FLAG_STR_MULTIPATH; /* Only allow one multi-path */
         }
 
-        if (is_wildcard && i != str_len && str[i] != '/')
-            goto fail; /* Wildcard followed by something other than a slash */
+        if (i != str_len && str[i] != '/')
+            goto fail; /* Element followed by something other than a slash */
         if (*written == child_path_len) {
             /* Continue counting the resulting length, but don't write any more */
             child_path = NULL;
