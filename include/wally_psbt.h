@@ -89,6 +89,7 @@ struct wally_psbt_input {
     struct wally_map signatures;
     struct wally_map unknowns;
     uint32_t sighash;
+    uint32_t has_sighash; /* Non-zero if a sighash was given, even SIGHASH_DEFAULT (0) */
     uint32_t required_locktime; /* Required tx locktime or 0 if not given */
     uint32_t required_lockheight; /* Required tx lockheight or 0 if not given */
     struct wally_map preimages; /* Preimage hash to data keyed by PSBT keytype + hash */

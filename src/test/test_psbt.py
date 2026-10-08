@@ -632,6 +632,37 @@ class PSBTTests(unittest.TestCase):
         serialized = self.to_base64(psbt, None, SERIALIZE_FLAG_REDUNDANT)
         self.assertNotEqual(serialized, b64)
 
+    def test_explicit_sighash_default(self):
+        """An explicit SIGHASH_DEFAULT (0) input sighash is kept, not dropped"""
+        sighash_acp = bytes.fromhex('010304' + '81000000')
+        sighash_default = bytes.fromhex('010304' + '00000000')
+        psbt = self.parse_base64(JSON['creator'][0]['result'])
+        unset_b64 = self.to_base64(psbt)
+        self.assertEqual(WALLY_OK, wally_psbt_set_input_sighash(psbt, 0, 0x81))
+        raw = base64.b64decode(self.to_base64(psbt))
+        self.assertEqual(raw.count(sighash_acp), 1)
+        default_b64 = base64.b64encode(raw.replace(sighash_acp, sighash_default)).decode()
+        wally_psbt_free(psbt)
+
+        # Parsing records the field as given, and serializing writes it back
+        psbt = self.parse_base64(default_b64)
+        self.assertEqual(psbt.contents.inputs[0].sighash, 0)
+        self.assertEqual(psbt.contents.inputs[0].has_sighash, 1)
+        self.assertEqual(self.to_base64(psbt), default_b64)
+
+        # Clearing the sighash removes the field
+        self.assertEqual(WALLY_OK, wally_psbt_set_input_sighash(psbt, 0, 0))
+        self.assertEqual(self.to_base64(psbt), unset_b64)
+        wally_psbt_free(psbt)
+
+        # Combining into a PSBT without a sighash copies the explicit default
+        psbt = self.parse_base64(unset_b64)
+        src = self.parse_base64(default_b64)
+        self.assertEqual(WALLY_OK, wally_psbt_combine(psbt, src))
+        self.assertEqual(self.to_base64(psbt), default_b64)
+        wally_psbt_free(src)
+        wally_psbt_free(psbt)
+
     def _ec_pubkey(self, seed_byte):
         """Return a valid compressed pubkey derived from a repeated seed byte"""
         priv, priv_len = make_cbuffer(seed_byte * 32)
