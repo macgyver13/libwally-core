@@ -444,6 +444,7 @@ int wally_psbt_input_set_sighash(struct wally_psbt_input *input, uint32_t sighas
         }
     }
     input->sighash = sighash;
+    input->has_sighash = sighash != 0;
     return WALLY_OK;
 }
 
@@ -1442,6 +1443,7 @@ int wally_psbt_set_tx_modifiable_flags(struct wally_psbt *psbt, uint32_t flags) 
         (flags & ~PSBT_TXMOD_ALL_FLAGS))
         return WALLY_EINVAL;
     psbt->tx_modifiable_flags = flags;
+    psbt->has_tx_modifiable_flags = flags != 0;
     return WALLY_OK;
 }
 
@@ -2364,6 +2366,7 @@ static int pull_psbt_input(const struct wally_psbt *psbt,
                 break;
             case PSBT_IN_SIGHASH_TYPE:
                 result->sighash = pull_le32_subfield(cursor, max);
+                result->has_sighash = 1u;
                 break;
             case PSBT_IN_BIP32_DERIVATION:
                 ret = pull_map_item(cursor, max, key, key_len, &result->keypaths);
@@ -2677,6 +2680,7 @@ int wally_psbt_from_bytes(const unsigned char *bytes, size_t len,
     }
     /* Reset modifiable flags for loaded PSBTs */
     (*output)->tx_modifiable_flags = 0;
+    (*output)->has_tx_modifiable_flags = 0;
 #ifdef BUILD_ELEMENTS
     (*output)->pset_modifiable_flags = 0;
 #endif /* BUILD_ELEMENTS */
@@ -2750,6 +2754,7 @@ int wally_psbt_from_bytes(const unsigned char *bytes, size_t len,
                 break;
             case PSBT_GLOBAL_TX_MODIFIABLE:
                 (*output)->tx_modifiable_flags = pull_u8_subfield(cursor, max);
+                (*output)->has_tx_modifiable_flags = 1u;
                 if ((*output)->tx_modifiable_flags & ~PSBT_TXMOD_ALL_FLAGS)
                     ret = WALLY_EINVAL; /* Invalid flags */
                 break;
@@ -3144,7 +3149,7 @@ static int push_psbt_input(const struct wally_psbt *psbt,
         /* Partial sigs */
         push_psbt_map(cursor, max, PSBT_IN_PARTIAL_SIG, false, &input->signatures);
         /* Sighash type */
-        if (input->sighash)
+        if (input->sighash || input->has_sighash)
             push_psbt_le32(cursor, max, PSBT_IN_SIGHASH_TYPE, false, input->sighash);
 
         if ((ret = push_varbuff_from_map(cursor, max, PSBT_IN_REDEEM_SCRIPT,
@@ -3448,7 +3453,7 @@ int wally_psbt_to_bytes(const struct wally_psbt *psbt, uint32_t flags,
         push_psbt_key(&cursor, &max, PSBT_GLOBAL_OUTPUT_COUNT, NULL, 0);
         push_varint_varbuff(&cursor, &max, psbt->num_outputs);
 
-        if (psbt->tx_modifiable_flags) {
+        if (psbt->has_tx_modifiable_flags) {
             push_psbt_key(&cursor, &max, PSBT_GLOBAL_TX_MODIFIABLE, NULL, 0);
             push_varint(&cursor, &max, sizeof(uint8_t));
             push_u8(&cursor, &max, psbt->tx_modifiable_flags & 0xff);
@@ -3668,8 +3673,10 @@ static int combine_input(struct wally_psbt_input *dst,
         return ret;
     if ((ret = wally_map_combine(&dst->unknowns, &src->unknowns)) != WALLY_OK)
         return ret;
-    if (!dst->sighash && src->sighash)
+    if (!dst->sighash && !dst->has_sighash && (src->sighash || src->has_sighash)) {
         dst->sighash = src->sighash;
+        dst->has_sighash = 1u;
+    }
     if (!dst->required_locktime && src->required_locktime)
         dst->required_locktime = src->required_locktime;
     if (!dst->required_lockheight && src->required_lockheight)
@@ -3858,6 +3865,7 @@ static int psbt_combine(struct wally_psbt *psbt, const struct wally_psbt *src,
 
     /* Take any extra flags from the source psbt that we don't have  */
     psbt->tx_modifiable_flags |= src->tx_modifiable_flags;
+    psbt->has_tx_modifiable_flags |= src->has_tx_modifiable_flags;
 
     for (i = 0; ret == WALLY_OK && i < psbt->num_inputs; ++i)
         ret = combine_input(&psbt->inputs[i], &src->inputs[i], is_pset, for_clone);
@@ -4183,6 +4191,7 @@ static int psbt_v2_to_v0(struct wally_psbt *psbt)
     psbt->fallback_locktime = 0;
     psbt->has_fallback_locktime = false;
     psbt->tx_modifiable_flags = 0;
+    psbt->has_tx_modifiable_flags = false;
     return WALLY_OK;
 }
 
@@ -5155,6 +5164,7 @@ done:
         wally_map_clear(&input->signatures);
         wally_map_clear(&input->taproot_leaf_paths);
         input->sighash = 0;
+        input->has_sighash = 0;
     }
     return WALLY_OK;
 }
@@ -5911,6 +5921,7 @@ int wally_psbt_add_input_signature(struct wally_psbt *psbt, size_t index,
             psbt->tx_modifiable_flags &= ~WALLY_PSBT_TXMOD_OUTPUTS;
         if ((sighash & WALLY_SIGHASH_MASK) == WALLY_SIGHASH_SINGLE)
             psbt->tx_modifiable_flags |= WALLY_PSBT_TXMOD_SINGLE;
+        psbt->has_tx_modifiable_flags = 1u;
     }
     return ret;
 }

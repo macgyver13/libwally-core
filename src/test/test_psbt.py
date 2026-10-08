@@ -1,3 +1,4 @@
+import base64
 import json
 import unittest
 from util import *
@@ -440,6 +441,63 @@ class PSBTTests(unittest.TestCase):
         SERIALIZE_FLAG_REDUNDANT = 0x1
         serialized = self.to_base64(psbt, None, SERIALIZE_FLAG_REDUNDANT)
         self.assertNotEqual(serialized, b64)
+
+    def test_explicit_sighash_default(self):
+        """An explicit SIGHASH_DEFAULT (0) input sighash is kept, not dropped"""
+        sighash_acp = bytes.fromhex('010304' + '81000000')
+        sighash_default = bytes.fromhex('010304' + '00000000')
+        psbt = self.parse_base64(JSON['creator'][0]['result'])
+        unset_b64 = self.to_base64(psbt)
+        self.assertEqual(WALLY_OK, wally_psbt_set_input_sighash(psbt, 0, 0x81))
+        raw = base64.b64decode(self.to_base64(psbt))
+        self.assertEqual(raw.count(sighash_acp), 1)
+        default_b64 = base64.b64encode(raw.replace(sighash_acp, sighash_default)).decode()
+        wally_psbt_free(psbt)
+
+        # Parsing records the field as given, and serializing writes it back
+        psbt = self.parse_base64(default_b64)
+        self.assertEqual(psbt.contents.inputs[0].sighash, 0)
+        self.assertEqual(psbt.contents.inputs[0].has_sighash, 1)
+        self.assertEqual(self.to_base64(psbt), default_b64)
+
+        # Clearing the sighash removes the field
+        self.assertEqual(WALLY_OK, wally_psbt_set_input_sighash(psbt, 0, 0))
+        self.assertEqual(self.to_base64(psbt), unset_b64)
+        wally_psbt_free(psbt)
+
+        # Combining into a PSBT without a sighash copies the explicit default
+        psbt = self.parse_base64(unset_b64)
+        src = self.parse_base64(default_b64)
+        self.assertEqual(WALLY_OK, wally_psbt_combine(psbt, src))
+        self.assertEqual(self.to_base64(psbt), default_b64)
+        wally_psbt_free(src)
+        wally_psbt_free(psbt)
+
+    def test_explicit_tx_modifiable_zero(self):
+        """An explicit zero PSBT_GLOBAL_TX_MODIFIABLE is kept, not dropped"""
+        zero_field = bytes.fromhex('01060100')
+        flags_field = bytes.fromhex('01060103')
+        psbt = pointer(wally_psbt())
+        self.assertEqual(WALLY_OK, wally_psbt_init_alloc(2, 0, 0, 0, 0, psbt))
+
+        # Setting flags through the API still serializes the field
+        self.assertEqual(WALLY_OK, wally_psbt_set_tx_modifiable_flags(psbt, 3))
+        flags_b64 = self.to_base64(psbt)
+        self.assertEqual(base64.b64decode(flags_b64).count(flags_field), 1)
+
+        # Setting zero through the API removes the field, as for the sighash
+        self.assertEqual(WALLY_OK, wally_psbt_set_tx_modifiable_flags(psbt, 0))
+        self.assertEqual(base64.b64decode(self.to_base64(psbt)).count(zero_field), 0)
+        wally_psbt_free(psbt)
+
+        # Parsing an explicit zero records the field as given, and serializing writes it back
+        raw = base64.b64decode(flags_b64)
+        self.assertEqual(raw.count(flags_field), 1)
+        zero_b64 = base64.b64encode(raw.replace(flags_field, zero_field)).decode()
+        psbt = self.parse_base64(zero_b64)
+        self.assertEqual(psbt.contents.has_tx_modifiable_flags, 1)
+        self.assertEqual(self.to_base64(psbt), zero_b64)
+        wally_psbt_free(psbt)
 
 if __name__ == '__main__':
     unittest.main()

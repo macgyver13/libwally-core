@@ -80,6 +80,7 @@ struct wally_psbt_input {
     struct wally_map signatures;
     struct wally_map unknowns;
     uint32_t sighash;
+    uint32_t has_sighash; /* Non-zero if a sighash was given, even SIGHASH_DEFAULT (0) */
     uint32_t required_locktime; /* Required tx locktime or 0 if not given */
     uint32_t required_lockheight; /* Required tx lockheight or 0 if not given */
     struct wally_map preimages; /* Preimage hash to data keyed by PSBT keytype + hash */
@@ -140,6 +141,7 @@ struct wally_psbt {
     uint32_t fallback_locktime;
     uint32_t has_fallback_locktime;
     uint32_t tx_modifiable_flags;
+    uint32_t has_tx_modifiable_flags; /* Whether tx_modifiable_flags was explicitly set, vs left at its default */
 #ifndef WALLY_ABI_NO_ELEMENTS
     struct wally_map global_scalars;
     uint32_t pset_modifiable_flags;
