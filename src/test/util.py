@@ -144,6 +144,7 @@ class wally_psbt_input(Structure):
                 ('signatures', wally_map),
                 ('unknowns', wally_map),
                 ('sighash', c_uint32),
+                ('has_sighash', c_uint32),
                 ('required_locktime', c_uint32),
                 ('required_lockheight', c_uint32),
                 ('preimages', wally_map),

@@ -444,6 +444,7 @@ int wally_psbt_input_set_sighash(struct wally_psbt_input *input, uint32_t sighas
         }
     }
     input->sighash = sighash;
+    input->has_sighash = sighash != 0;
     return WALLY_OK;
 }
 
@@ -2364,6 +2365,7 @@ static int pull_psbt_input(const struct wally_psbt *psbt,
                 break;
             case PSBT_IN_SIGHASH_TYPE:
                 result->sighash = pull_le32_subfield(cursor, max);
+                result->has_sighash = 1u;
                 break;
             case PSBT_IN_BIP32_DERIVATION:
                 ret = pull_map_item(cursor, max, key, key_len, &result->keypaths);
@@ -3144,7 +3146,7 @@ static int push_psbt_input(const struct wally_psbt *psbt,
         /* Partial sigs */
         push_psbt_map(cursor, max, PSBT_IN_PARTIAL_SIG, false, &input->signatures);
         /* Sighash type */
-        if (input->sighash)
+        if (input->sighash || input->has_sighash)
             push_psbt_le32(cursor, max, PSBT_IN_SIGHASH_TYPE, false, input->sighash);
 
         if ((ret = push_varbuff_from_map(cursor, max, PSBT_IN_REDEEM_SCRIPT,
@@ -3668,8 +3670,10 @@ static int combine_input(struct wally_psbt_input *dst,
         return ret;
     if ((ret = wally_map_combine(&dst->unknowns, &src->unknowns)) != WALLY_OK)
         return ret;
-    if (!dst->sighash && src->sighash)
+    if (!dst->sighash && !dst->has_sighash && (src->sighash || src->has_sighash)) {
         dst->sighash = src->sighash;
+        dst->has_sighash = 1u;
+    }
     if (!dst->required_locktime && src->required_locktime)
         dst->required_locktime = src->required_locktime;
     if (!dst->required_lockheight && src->required_lockheight)
@@ -5155,6 +5159,7 @@ done:
         wally_map_clear(&input->signatures);
         wally_map_clear(&input->taproot_leaf_paths);
         input->sighash = 0;
+        input->has_sighash = 0;
     }
     return WALLY_OK;
 }
