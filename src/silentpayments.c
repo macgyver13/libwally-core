@@ -1298,19 +1298,50 @@ int wally_psbt_get_sp_musig_session_digest(const struct wally_psbt *psbt,
     return WALLY_OK;
 }
 
-/* Silent-payment shares describe the complete eligible input set, so every
- * eligible input must commit to all inputs and outputs when it is signed. */
+/* True if a signature commits to all inputs and outputs: its sighash byte is
+ * SIGHASH_ALL, or it is a 64 byte BIP-340 signature implying SIGHASH_DEFAULT */
+static bool sp_sig_signs_all(const struct wally_map_item *item, bool is_schnorr)
+{
+    if (is_schnorr && item->value_len == EC_SIGNATURE_LEN)
+        return true;
+    return item->value_len && item->value[item->value_len - 1] == WALLY_SIGHASH_ALL;
+}
+
+/* BIP-375 requires every input, eligible or not, to commit to all inputs and
+ * outputs when silent payment outputs are present: a declared sighash and the
+ * sighash byte of each existing signature must be SIGHASH_ALL, or
+ * SIGHASH_DEFAULT for a taproot input. */
 static int sp_sighash_policy(const struct wally_psbt *psbt)
 {
-    size_t i;
+    size_t i, j;
     for (i = 0; i < psbt->num_inputs; ++i) {
+        const struct wally_psbt_input *input = &psbt->inputs[i];
+        const struct wally_tx_output *utxo = NULL;
+        const struct wally_map_item *tap_key_sig;
         bool is_eligible = false, is_taproot = false;
+        size_t script_type = WALLY_SCRIPT_TYPE_UNKNOWN;
         int ret = sp_classify_input(psbt, i, &is_eligible, &is_taproot);
-        (void)is_taproot;
         if (ret != WALLY_OK)
             return ret;
-        if (is_eligible && psbt->inputs[i].sighash != WALLY_SIGHASH_DEFAULT &&
-            psbt->inputs[i].sighash != WALLY_SIGHASH_ALL)
+        /* is_taproot only marks eligible inputs, but SIGHASH_DEFAULT is
+         * valid for any taproot spend, including a script path one */
+        if (!is_taproot &&
+            wally_psbt_get_input_best_utxo(psbt, i, &utxo) == WALLY_OK && utxo &&
+            wally_scriptpubkey_get_type(utxo->script, utxo->script_len,
+                                        &script_type) == WALLY_OK)
+            is_taproot = script_type == WALLY_SCRIPT_TYPE_P2TR;
+        if ((input->sighash || input->has_sighash) &&
+            input->sighash != WALLY_SIGHASH_ALL &&
+            !(is_taproot && input->sighash == WALLY_SIGHASH_DEFAULT))
+            return WALLY_EINVAL;
+        for (j = 0; j < input->signatures.num_items; ++j)
+            if (!sp_sig_signs_all(&input->signatures.items[j], false))
+                return WALLY_EINVAL;
+        for (j = 0; j < input->taproot_leaf_signatures.num_items; ++j)
+            if (!sp_sig_signs_all(&input->taproot_leaf_signatures.items[j], true))
+                return WALLY_EINVAL;
+        tap_key_sig = wally_map_get_integer(&input->psbt_fields, PSBT_IN_TAP_KEY_SIG);
+        if (tap_key_sig && !sp_sig_signs_all(tap_key_sig, true))
             return WALLY_EINVAL;
     }
     return WALLY_OK;

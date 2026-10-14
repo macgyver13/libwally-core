@@ -183,6 +183,68 @@ class MusigSilentPaymentRoundsTests(unittest.TestCase):
         self.assertEqual(psbt.contents.inputs[0].sp_partial_ecdh_shares.num_items, 0)
         wally_psbt_free(psbt)
 
+    def test_round1_checks_sighash_of_every_input(self):
+        """BIP-375 applies the sighash rule to ineligible inputs too"""
+        psbt = self.build_psbt()
+        p2wpkh = '0014' + '11' * 20
+        multisig = '5221' + sp.pubkey_of('44' * 32).hex() + \
+                   '21' + sp.pubkey_of('55' * 32).hex() + '52ae'
+        p2sh = 'a914' + hashlib.new('ripemd160', hashlib.sha256(
+            bytes.fromhex(multisig)).digest()).hexdigest() + '87'
+        for i, script_hex in ((1, p2wpkh), (2, p2sh)):
+            txid, txid_len = make_cbuffer('%02x' % (0xc0 + i) * 32)
+            tx_in = pointer(wally_tx_input())
+            self.assertEqual(wally_tx_input_init_alloc(
+                txid, txid_len, 0, 0xffffffff, None, 0, None, tx_in), WALLY_OK)
+            self.assertEqual(wally_psbt_add_tx_input_at(psbt, i, 0, tx_in),
+                             WALLY_OK)
+            script, script_len = make_cbuffer(script_hex)
+            utxo = pointer(wally_tx_output())
+            self.assertEqual(wally_tx_output_init_alloc(
+                100000, script, script_len, utxo), WALLY_OK)
+            self.assertEqual(wally_psbt_set_input_witness_utxo(psbt, i, utxo),
+                             WALLY_OK)
+        redeem, redeem_len = make_cbuffer(multisig)
+        self.assertEqual(wally_psbt_set_input_redeem_script(
+            psbt, 2, redeem, redeem_len), WALLY_OK)
+        self.assertEqual(wally_psbt_get_input_sp_eligible(psbt, 1), (WALLY_OK, 1))
+        self.assertEqual(wally_psbt_get_input_sp_eligible(psbt, 2), (WALLY_OK, 0))
+
+        musig = self.musig_input()
+        key, key_len = make_cbuffer(self.secret_keys[0])
+        entropy = b'\x11' * 32 + b'\x22' * 32
+        nonce_out = (c_void_p * 1)()
+        digest_out, _ = make_cbuffer('00' * SHA256_LEN)
+
+        def round1():
+            ret, _ = wally_psbt_sp_musig_round1(
+                psbt, byref(musig), 1, SIGNER_0, 1, key, key_len, entropy,
+                len(entropy), 0, nonce_out, digest_out, SHA256_LEN)
+            return ret
+
+        # SIGHASH_NONE, or an explicit SIGHASH_DEFAULT on a non-taproot input
+        for sighash, explicit in ((2, 1), (0, 1)):
+            self.assertEqual(wally_psbt_set_input_sighash(psbt, 2, sighash),
+                             WALLY_OK)
+            psbt.contents.inputs[2].has_sighash = explicit
+            self.assertEqual(round1(), WALLY_EINVAL, sighash)
+            self.assertEqual(psbt.contents.inputs[0].musig2_pubnonces.num_items, 0)
+
+        # A non-SIGHASH_ALL signature fails even when no sighash is declared
+        self.assertEqual(wally_psbt_set_input_sighash(psbt, 2, 0), WALLY_OK)
+        sig_pubkey = sp.pubkey_of('44' * 32)
+        sig = bytes.fromhex('3006020101020101') + b'\x02'
+        self.assertEqual(wally_psbt_add_input_signature(
+            psbt, 2, sig_pubkey, len(sig_pubkey), sig, len(sig)), WALLY_OK)
+        self.assertEqual(round1(), WALLY_EINVAL)
+        self.assertEqual(wally_map_clear(byref(psbt.contents.inputs[2].signatures)),
+                         WALLY_OK)
+
+        self.assertEqual(wally_psbt_set_input_sighash(psbt, 2, 1), WALLY_OK)
+        self.assertEqual(round1(), WALLY_OK)
+        wally_musig_secnonce_free(nonce_out[0])
+        wally_psbt_free(psbt)
+
     def test_round1_rejects_resolved_but_modifiable_psbt(self):
         psbt = self.build_psbt()
         musig = self.musig_input()
