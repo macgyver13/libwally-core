@@ -2,6 +2,7 @@
 #include "config.h"
 
 #include <wally_psbt.h>
+#include <wally_psbt_members.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -133,13 +134,53 @@ static void test_psbt_write(const struct psbt_test *test,
 
     for (i = 0; i <= psbt_len; i++) {
         /* A too short buffer should return OK and the required length */
-        if (wally_psbt_to_bytes(psbt, 0, i == 0 ? NULL : p + plen - i, i,
-                                &written) != WALLY_OK) {
+        if (wally_psbt_to_bytes(psbt, 0, p + plen - i, i, &written) != WALLY_OK) {
             fail("wally_psbt_to_bytes %s should have succeeded", test->base64);
         }
         if (written != psbt_len)
             fail("wally_psbt_to_bytes %s wrote %zu in %zu bytes?",
                  test->base64, written, i);
+    }
+    if (wally_psbt_to_bytes(psbt, 0, NULL, 0, &written) != WALLY_OK ||
+        written != psbt_len)
+        fail("wally_psbt_to_bytes %s length query failed", test->base64);
+    wally_psbt_free(psbt);
+}
+
+/* Test that we don't write past end of buffer when getting output scripts */
+static void test_psbt_output_scripts(const struct psbt_test *test,
+                                     unsigned char *p, size_t plen)
+{
+    size_t i, j, script_len, written;
+    struct wally_psbt *psbt;
+
+#ifndef BUILD_ELEMENTS
+    if (test->is_pset)
+        return;
+#endif
+
+    if (wally_psbt_from_base64(test->base64, 0, &psbt) != WALLY_OK)
+        abort();
+
+    for (j = 0; j < psbt->num_outputs; j++) {
+        if (wally_psbt_get_output_script_len(psbt, j, &script_len) != WALLY_OK)
+            abort();
+        /* A too short (or for an empty script, zero length) buffer should
+         * return OK and the required length */
+        for (i = 0; i <= script_len; i++) {
+            if (wally_psbt_get_output_script(psbt, j, p + plen - i, i,
+                                             &written) != WALLY_OK ||
+                written != script_len)
+                fail("wally_psbt_get_output_script %s output %zu failed in %zu bytes",
+                     test->base64, j, i);
+        }
+        if (wally_psbt_get_output_script(psbt, j, NULL, 0, &written) != WALLY_OK ||
+            written != script_len)
+            fail("wally_psbt_get_output_script %s output %zu length query failed",
+                 test->base64, j);
+        if (wally_psbt_get_output_script(psbt, j, NULL, 1, &written) != WALLY_EINVAL)
+            fail("wally_psbt_get_output_script %s output %zu accepted NULL",
+                 test->base64, j);
     }
     wally_psbt_free(psbt);
 }
@@ -157,6 +198,7 @@ int main(void)
     for (i = 0; i < sizeof(valid_psbts) / sizeof(valid_psbts[0]); i++) {
         test_psbt_read(valid_psbts + i, p, plen);
         test_psbt_write(valid_psbts + i, p, plen);
+        test_psbt_output_scripts(valid_psbts + i, p, plen);
     }
 
     wally_cleanup(0);

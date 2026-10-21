@@ -3485,7 +3485,7 @@ int wally_psbt_to_bytes(const struct wally_psbt *psbt, uint32_t flags,
     if (written)
         *written = 0;
 
-    if (!psbt_is_valid(psbt) || BYTES_INVALID(bytes_out, len) ||
+    if (!psbt_is_valid(psbt) || (!bytes_out && len) ||
         (flags & ~all_flags) || !written)
         return WALLY_EINVAL;
 
@@ -6210,7 +6210,7 @@ int wally_psbt_get_output_script(const struct wally_psbt *psbt, size_t index,
     struct wally_psbt_output *p = psbt_get_output(psbt, index);
     if (written)
         *written = 0;
-    if (!p || BYTES_INVALID(bytes_out, len) || !written)
+    if (!p || (!bytes_out && len) || !written)
         return WALLY_EINVAL;
     *written = psbt->version == PSBT_0 ? psbt->tx->outputs[index].script_len : p->script_len;
     if (bytes_out && *written <= len && *written)
