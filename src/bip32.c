@@ -101,15 +101,14 @@ static int path_from_str_n(const char *str, size_t str_len,
     size_t start, multi_start, num_multi = 0, i = 0;
     uint64_t v;
 
-    *features = 0;
-
     if (!str || !str_len || child_num >= BIP32_INITIAL_HARDENED_CHILD ||
         (flags & ~BIP32_ALL_DEFINED_FLAGS) ||
         (!(flags & BIP32_FLAG_STR_WILDCARD) && child_num) ||
         (!(flags & BIP32_FLAG_STR_MULTIPATH) && multi_index) ||
-        !child_path || !child_path_len || !written)
+        !child_path || !child_path_len || !features || !written)
         goto fail;
 
+    *features = 0;
     *written = 0;
 
     if (flags & BIP32_FLAG_STR_BARE) {
@@ -238,7 +237,8 @@ static int path_from_str_n(const char *str, size_t str_len,
     }
 
 fail:
-    *features = 0;
+    if (features)
+        *features = 0;
     if (written)
         *written = 0;
     return WALLY_EINVAL;
