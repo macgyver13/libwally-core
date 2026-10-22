@@ -603,18 +603,17 @@ static int sp_store_share(struct wally_psbt *psbt, const secp256k1_context *ctx,
 {
     unsigned char share[EC_PUBLIC_KEY_LEN], proof[SP_DLEQ_PROOF_LEN];
     unsigned char aux[SHA256_LEN];
-    secp256k1_pubkey share_pubkey = *scan_pubkey;
+    secp256k1_pubkey share_pubkey;
     size_t share_len = sizeof(share);
     int ret = WALLY_ERROR;
 
     if (sp_proof_entropy(entropy, proof_index, aux) != WALLY_OK)
         goto cleanup;
 
-    if (!secp256k1_ec_pubkey_tweak_mul(ctx, &share_pubkey, sum_priv_key) ||
+    if (!secp256k1_dleq_prove(ctx, proof, &share_pubkey, sum_priv_key, scan_pubkey, aux, NULL) ||
         !secp256k1_ec_pubkey_serialize(ctx, share, &share_len, &share_pubkey,
                                        SECP256K1_EC_COMPRESSED) ||
         share_len != sizeof(share) ||
-        !secp256k1_dleq_prove(ctx, proof, sum_priv_key, scan_pubkey, aux, NULL) ||
         /* Check our own work: a bad proof makes the payment unusable */
         !secp256k1_dleq_verify(ctx, proof, sum_pubkey, scan_pubkey, &share_pubkey, NULL))
         goto cleanup;
@@ -641,18 +640,17 @@ static int sp_store_input_share(struct wally_psbt_input *input,
 {
     unsigned char share[EC_PUBLIC_KEY_LEN], proof[SP_DLEQ_PROOF_LEN];
     unsigned char aux[SHA256_LEN];
-    secp256k1_pubkey share_pubkey = *scan_pubkey;
+    secp256k1_pubkey share_pubkey;
     size_t share_len = sizeof(share);
     int ret = WALLY_ERROR;
 
     if (sp_proof_entropy(entropy, proof_index, aux) != WALLY_OK)
         goto cleanup;
 
-    if (!secp256k1_ec_pubkey_tweak_mul(ctx, &share_pubkey, priv_key) ||
+    if (!secp256k1_dleq_prove(ctx, proof, &share_pubkey, priv_key, scan_pubkey, aux, NULL) ||
         !secp256k1_ec_pubkey_serialize(ctx, share, &share_len, &share_pubkey,
                                        SECP256K1_EC_COMPRESSED) ||
         share_len != sizeof(share) ||
-        !secp256k1_dleq_prove(ctx, proof, priv_key, scan_pubkey, aux, NULL) ||
         /* Check our own work against the key the other signers will verify
          * with: a bad proof makes the payment unresolvable for all of them
          */
