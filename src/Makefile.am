@@ -23,6 +23,7 @@ include_HEADERS += $(top_srcdir)/include/wally_musig.h
 include_HEADERS += $(top_srcdir)/include/wally_psbt.h
 include_HEADERS += $(top_srcdir)/include/wally_psbt_members.h
 include_HEADERS += $(top_srcdir)/include/wally_script.h
+include_HEADERS += $(top_srcdir)/include/wally_silentpayments.h
 include_HEADERS += $(top_srcdir)/include/wally_symmetric.h
 include_HEADERS += $(top_srcdir)/include/wally_transaction.h
 include_HEADERS += $(top_srcdir)/include/wally_transaction_members.h
@@ -170,6 +171,7 @@ libwallycore_la_SOURCES = \
     script.c \
     script_iter.c \
     scrypt.c \
+    silentpayments.c \
     sign.c \
     symmetric.c \
     transaction.c \
@@ -200,6 +202,7 @@ libwallycore_la_INCLUDES = \
     include/wally_psbt.h \
     include/wally_psbt_members.h \
     include/wally_script.h \
+    include/wally_silentpayments.h \
     include/wally_symmetric.h \
     include/wally_transaction.h \
     include/wally_transaction_members.h
@@ -387,6 +390,7 @@ check-libwallycore: $(PYTHON_TEST_DEPS)
 	$(AM_V_at)$(PYTHON_TEST) test/test_script.py
 	$(AM_V_at)$(PYTHON_TEST) test/test_scrypt.py
 	$(AM_V_at)$(PYTHON_TEST) test/test_sign.py
+	$(AM_V_at)$(PYTHON_TEST) test/test_silentpayments.py
 	$(AM_V_at)$(PYTHON_TEST) test/test_symmetric.py
 	$(AM_V_at)$(PYTHON_TEST) test/test_transaction.py
 	$(AM_V_at)$(PYTHON_TEST) test/test_wif.py

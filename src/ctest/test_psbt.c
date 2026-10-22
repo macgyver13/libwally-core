@@ -275,6 +275,7 @@ int main(void)
                 /* Tx modifiable flags are not round-tripped, since v0 has
                  * no concept of non-modifiability */
                 psbt_clone->tx_modifiable_flags = psbt->tx_modifiable_flags;
+                psbt_clone->has_tx_modifiable_flags = psbt->has_tx_modifiable_flags;
             }
         } else {
             fail("Unknown psbt version %d in %s", psbt->version, base64_in);

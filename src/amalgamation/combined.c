@@ -86,6 +86,7 @@
 #include "src/script_iter.c"
 #include "src/scrypt.c"
 #include "src/sign.c"
+#include "src/silentpayments.c"
 #include "src/symmetric.c"
 #include "src/transaction.c"
 #include "src/tx_io.c"
